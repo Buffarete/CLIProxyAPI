@@ -85,6 +85,13 @@ func (s *Service) Run(ctx context.Context) error {
 
 	s.registerPluginAuthParser()
 	if s.coreManager != nil && !homeEnabled {
+		if quotaSignals := s.configureQuotaSignalStore(cfg); quotaSignals != nil {
+			defer func() {
+				if errSave := quotaSignals.Save(); errSave != nil {
+					log.Warnf("quota signals: save on shutdown: %v", errSave)
+				}
+			}()
+		}
 		if errLoad := s.coreManager.Load(ctx); errLoad != nil {
 			log.Warnf("failed to load auth store: %v", errLoad)
 		}
