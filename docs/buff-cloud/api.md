@@ -3,7 +3,7 @@
 What Buff Cloud's AI page reads from and writes to this fork. Every path below is under
 `/v8/management` and needs the management key, sent as `Authorization: Bearer <management-key>` or
 `X-Management-Key: <management-key>`. On box the key is `CLI_PROXY_MANAGEMENT_KEY` in
-`~/.config/buff-cloud/env` and the proxy listens on `127.0.0.1:4120`.
+`~/.config/buff-cloud/env` and the proxy listens on `127.0.0.1:4110` (4120 before buff-cloud B1).
 
 Times are epoch milliseconds. Credential ids are auth file names, such as `linked-claude_4.json`.
 Providers use Buff Cloud's names: `anthropic` for Claude credentials, `openai` for Codex.
@@ -245,7 +245,7 @@ before answering. Nothing is written unless every field is valid. The answer is 
 | `strategy` | `most-room`, `soonest-reset`, `round-robin`, `weighted-round-robin`, `fill-first` |
 | `pinned` | an enabled credential's id, or `null` or `""` to clear |
 | `pinnedFallback` | `true`: other accounts serve the pinned provider when the pin cannot. `false`: the request gets the pinned account's error. |
-| `proxyEnabled` | `false`: every proxied request gets a 503. Management and `/healthz` stay up. |
+| `proxyEnabled` | `false`: every proxied request gets a 403. Management and `/healthz` stay up. |
 
 Change the strategy:
 
@@ -291,13 +291,14 @@ Turn the proxy off with `{"proxyEnabled": false}` and on with `{"proxyEnabled": 
 `/v1/messages`, `/v1/responses` and every other proxied path answer:
 
 ```http
-HTTP/1.1 503 Service Unavailable
+HTTP/1.1 403 Forbidden
 
 {"error":{"message":"Buff Cloud has turned this proxy off. Turn it back on from the AI page.","type":"proxy_off"},"type":"error"}
 ```
 
-Claude Code treats a 503 as transient and retries it: `claude -p` printed nothing for 90 seconds while
-the proxy was off (19 attempts) before it was stopped.
+It is a 403, not a 503, because Claude Code treats a 503 as transient and retries it: with a 503,
+`claude -p` printed nothing for 90 seconds while the proxy was off (19 attempts) before it was stopped.
+A 403 ends the request at once and the client shows the message.
 
 ## Enable or disable a credential
 
