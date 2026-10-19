@@ -127,6 +127,7 @@ func (m *Manager) Register(ctx context.Context, auth *Auth) (*Auth, error) {
 	} else if auth.CredentialVersion == 0 {
 		auth.CredentialVersion = 1
 	}
+	m.carryQuotaObservationLocked(auth, m.auths[auth.ID])
 	auth.Generation = 1
 	// Serialize this credential, but release the manager lock during store I/O.
 	// Persist failures stay non-fatal, but must not be silent: a restart would
@@ -360,6 +361,7 @@ func (m *Manager) updateInternalLocked(ctx context.Context, base, auth *Auth, mo
 	auth.Success = existing.Success
 	auth.Failed = existing.Failed
 	auth.recentRequests = existing.recentRequests
+	m.carryQuotaObservationLocked(auth, existing)
 	if auth.Generation <= existing.Generation {
 		auth.Generation = existing.Generation + 1
 	} else {
@@ -592,6 +594,7 @@ func (m *Manager) Load(ctx context.Context) error {
 		if auth.CredentialVersion == 0 {
 			auth.CredentialVersion = 1
 		}
+		m.carryQuotaObservationLocked(auth, previousAuths[auth.ID])
 		m.auths[auth.ID] = auth.Clone()
 	}
 

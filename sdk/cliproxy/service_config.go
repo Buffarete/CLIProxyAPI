@@ -78,6 +78,8 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
+	case coreauth.RoomStrategyMostRoom, coreauth.RoomStrategySoonestReset:
+		state.strategy = strings.ToLower(strings.TrimSpace(cfg.Routing.Strategy))
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
@@ -97,6 +99,23 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	return state
 }
 
+// roomStrategyOnlyChange reports whether next differs from previous only by a
+// switch between the two room strategies (Buff Cloud fork).
+func roomStrategyOnlyChange(previous *routingRuntimeState, next routingRuntimeState) bool {
+	if previous == nil {
+		return false
+	}
+	isRoom := func(strategy string) bool {
+		return strategy == coreauth.RoomStrategyMostRoom || strategy == coreauth.RoomStrategySoonestReset
+	}
+	if !isRoom(previous.strategy) || !isRoom(next.strategy) {
+		return false
+	}
+	same := *previous
+	same.strategy = next.strategy
+	return same == next
+}
+
 func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 	var selector coreauth.Selector
 	switch state.strategy {
@@ -104,6 +123,8 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
+	case coreauth.RoomStrategyMostRoom, coreauth.RoomStrategySoonestReset:
+		selector = coreauth.NewRoomSelector(state.strategy)
 	default:
 		selector = &coreauth.RoundRobinSelector{}
 	}
@@ -258,7 +279,9 @@ func (s *Service) applyManagerConfig(ctx context.Context, commit configCommit) b
 	}
 	routingState := normalizedRoutingRuntimeState(commit.cfg)
 	if s.appliedRoutingState == nil || *s.appliedRoutingState != routingState {
-		s.coreManager.SetSelector(newRoutingSelector(routingState))
+		if !roomStrategyOnlyChange(s.appliedRoutingState, routingState) || !s.coreManager.SetRoomStrategy(routingState.strategy) {
+			s.coreManager.SetSelector(newRoutingSelector(routingState))
+		}
 		s.appliedRoutingState = &routingState
 	}
 	s.applyRetryConfig(commit.cfg)

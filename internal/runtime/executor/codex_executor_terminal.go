@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -325,6 +326,18 @@ func newCodexStatusErrWithCooling(statusCode int, body []byte, modelLevelCooling
 	err := statusErr{code: errCode, msg: string(body), credentialScoped: credentialScoped}
 	if retryAfter := parseCodexRetryAfter(errCode, body, time.Now()); retryAfter != nil {
 		err.retryAfter = retryAfter
+	}
+	return err
+}
+
+// codexStatusErrOrRefusal is newCodexStatusErrWithCooling for an HTTP response,
+// except that with disable-codex-cloaking a refusal of the request
+// (helps.IsCodexRefusal, and not a usage_limit_reached or model-capacity body)
+// becomes request-scoped, like the Claude passthrough's (Buff Cloud fork).
+func codexStatusErrOrRefusal(cfg *config.Config, statusCode int, headers http.Header, body []byte, modelLevelCooling bool) error {
+	err := newCodexStatusErrWithCooling(statusCode, body, modelLevelCooling)
+	if cfg != nil && cfg.Codex.DisableCodexCloaking && helps.IsCodexRefusal(statusCode, headers) && !isCodexUsageLimitError(body) && !isCodexModelCapacityError(body) {
+		return upstreamRefusalError{err}
 	}
 	return err
 }

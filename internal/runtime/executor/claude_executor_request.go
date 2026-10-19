@@ -784,6 +784,21 @@ func (claudeEntitlementError) IsCredentialScoped() bool {
 	return false
 }
 
+// upstreamRefusalError marks a 429 that refuses the request itself (no
+// rate-limit headers, no Retry-After); see helps.IsClaudeRefusal. Like
+// claudeEntitlementError it neither rotates nor cools down (Buff Cloud fork).
+type upstreamRefusalError struct {
+	statusErr
+}
+
+func (upstreamRefusalError) IsRequestScoped() bool {
+	return true
+}
+
+func (upstreamRefusalError) IsCredentialScoped() bool {
+	return false
+}
+
 type claudeRateLimitError struct {
 	statusErr
 	credentialScoped bool
@@ -795,6 +810,19 @@ func (e claudeRateLimitError) IsCredentialScoped() bool {
 
 func (e claudeRateLimitError) IsRequestScoped() bool {
 	return false
+}
+
+// classifyUpstreamError classifies a non-2xx Anthropic response. With
+// disable-claude-cloak-mode (this fork's passthrough) the proxy forwards every
+// client as it is, so Anthropic may refuse one (helps.IsClaudeRefusal); that
+// refusal goes back to the client without cooling the credential down or trying
+// another one (Buff Cloud fork). Otherwise upstream's classification applies.
+func (e *ClaudeExecutor) classifyUpstreamError(statusCode int, headers http.Header, body []byte) error {
+	err := classifyClaudeUpstreamErrorWithCooling(statusCode, headers, body, e.modelLevelCooling())
+	if claudePassthrough(e.cfg) && helps.IsClaudeRefusal(statusCode, headers) && !claudeBodyIndicatesFastModeCredits(body) {
+		return upstreamRefusalError{statusErr{code: statusCode, msg: string(body)}}
+	}
+	return err
 }
 
 // classifyClaudeUpstreamError promotes upstream refusals that no other credential

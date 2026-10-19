@@ -416,8 +416,17 @@ type QuotaExceeded struct {
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
 	// Strategy selects the credential selection strategy.
-	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
+	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first",
+	// and in the Buff Cloud fork "most-room" and "soonest-reset".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+
+	// Pinned names a credential (its auth ID, the auth file name) that serves every request
+	// of its own provider while it is available. Requests for other providers are unaffected.
+	Pinned string `yaml:"pinned,omitempty" json:"pinned,omitempty"`
+
+	// PinnedFallback lets requests use other credentials when the pinned one is unavailable or
+	// fails. When false, those requests get the pinned credential's error instead. Default: true.
+	PinnedFallback *bool `yaml:"pinned-fallback,omitempty" json:"pinned-fallback,omitempty"`
 
 	// SessionAffinity enables universal session-sticky routing for all clients.
 	// Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,

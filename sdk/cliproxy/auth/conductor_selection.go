@@ -670,7 +670,8 @@ func selectionArgForSelector(selector Selector, routeModel string) string {
 
 func selectorContextForAvailableAuths(ctx context.Context, selector Selector, routeModel string) context.Context {
 	ctx = withWeightedSelectorStateModel(ctx, selector, routeModel)
-	if !isBuiltInSelector(selector) {
+	_, roomSelector := selector.(*RoomSelector)
+	if !isBuiltInSelector(selector) && !roomSelector {
 		if _, sessionAffinity := selector.(*SessionAffinitySelector); !sessionAffinity {
 			return ctx
 		}
@@ -1734,6 +1735,10 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
+	// routing.pinned is applied by the legacy pick paths (Buff Cloud fork).
+	if pinnedID, _ := m.routingPin(); pinnedID != "" {
+		return false
+	}
 	return isBuiltInSelector(m.Selector())
 }
 
@@ -1847,6 +1852,9 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 	}
 	registryRef := registry.GetGlobalRegistry()
 	targetKey := canonicalSchedulingProvider(provider)
+	if pinnedAuthID == "" {
+		pinnedAuthID = m.routingPinLocked(map[string]struct{}{targetKey: {}}, model, eligibility, tried, time.Now())
+	}
 	affinitySelector, hasAffinity := selector.(*SessionAffinitySelector)
 	trackTransientAffinity := hasAffinity && affinitySelector != nil && affinitySelector.rebindOnQuotaOnly
 	var affinityCandidates []*Auth
@@ -2183,6 +2191,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		}
 	}
 	registryRef := registry.GetGlobalRegistry()
+	if pinnedAuthID == "" {
+		pinnedAuthID = m.routingPinLocked(providerSet, model, eligibility, tried, time.Now())
+	}
 	affinitySelector, hasAffinity := selector.(*SessionAffinitySelector)
 	trackTransientAffinity := hasAffinity && affinitySelector != nil && affinitySelector.rebindOnQuotaOnly
 	var affinityCandidates []*Auth
