@@ -95,6 +95,10 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if rebuildMidSystemMessageEnabled(e.cfg, auth) {
 		body = rebuildMidSystemMessagesToTopLevel(body)
 	}
+	passthroughBody := claudePassthroughBody(e.cfg, body)
+	if passthroughBody != nil {
+		cchSigning = false
+	}
 
 	// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
 	// based on client type and configuration.
@@ -243,6 +247,9 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		bodyForUpstream = finalizeClaudeCompactionSummaryBody(bodyForUpstream)
 	}
 	bodyForUpstream = applyClaudePreservedThinkingBinding(bodyForUpstream)
+	if passthroughBody != nil {
+		bodyForUpstream = finishClaudePassthroughBody(passthroughBody, baseModel, upstreamStream)
+	}
 	// User rules match the fully prepared business body and are applied only once.
 	var touchedPayloadPaths map[string]bool
 	bodyForUpstream, touchedPayloadPaths = helps.ApplyPayloadConfigWithTrackedPaths(

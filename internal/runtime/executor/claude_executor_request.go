@@ -1217,6 +1217,10 @@ func applyClaudeHeadersWithNativeProfile(
 	if r == nil {
 		return nil
 	}
+	if claudePassthrough(cfg) {
+		applyClaudePassthroughHeaders(r, auth, apiKey, extraBetas, incomingHeaders)
+		return nil
+	}
 	hdrDefault := func(cfgVal, fallback string) string {
 		if cfgVal != "" {
 			return cfgVal
