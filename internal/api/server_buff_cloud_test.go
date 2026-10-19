@@ -33,8 +33,8 @@ func TestProxyPausedRefusesProxiedRequestsAndKeepsManagementUp(t *testing.T) {
 			engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, p, strings.NewReader(`{}`)))
 			wantRefused := paused && refused[p]
 			if wantRefused {
-				if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), ProxyPausedMessage) {
-					t.Errorf("paused %s: %d %s, want 503 with the message", p, recorder.Code, recorder.Body.String())
+				if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), ProxyPausedMessage) {
+					t.Errorf("paused %s: %d %s, want 403 with the message", p, recorder.Code, recorder.Body.String())
 				}
 			} else if recorder.Code != http.StatusOK {
 				t.Errorf("paused=%v %s: %d, want served", paused, p, recorder.Code)

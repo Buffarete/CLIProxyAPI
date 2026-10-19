@@ -33,8 +33,10 @@ func (s *Server) registerBuffCloudRoutes(v8 *gin.RouterGroup) {
 	v8.PATCH("/buff/settings", s.mgmt.PatchBuffSettings)
 }
 
-// proxyPausedMiddleware answers every proxied request with 503 while
+// proxyPausedMiddleware answers every proxied request with 403 while
 // routing.paused is set. Management, /healthz and OAuth callbacks stay up.
+// Not 503: Claude Code retries a 503 for about 90 seconds and shows nothing,
+// while a 403 ends the request at once with the message.
 func (s *Server) proxyPausedMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := s.getConfig()
@@ -42,7 +44,7 @@ func (s *Server) proxyPausedMiddleware() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "proxy_off", "message": ProxyPausedMessage},
 		})
