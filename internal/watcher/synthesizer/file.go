@@ -11,6 +11,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	kimiauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/kimi"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -272,6 +273,10 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 				a.Attributes["plan_type"] = codex.DefaultPlanType
 			}
 		}
+	}
+	if linked.Dir(metadata) != "" {
+		// Buff Cloud fork: a linked auth file holds no token; load it from the linked dir.
+		applyLinkedAuth(a)
 	}
 	a.BindFileSnapshot(fullPath, data)
 	return []*coreauth.Auth{a}, nil

@@ -180,6 +180,7 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 	if rebuildMidSystemMessageEnabled(e.cfg, auth) {
 		body = rebuildMidSystemMessagesToTopLevel(body)
 	}
+	passthroughBody := claudePassthroughBody(e.cfg, body)
 
 	directAnthropic := isAnthropicUpstreamBase(baseURL)
 	// Claude Code's count_tokens carries only model, messages and tools, so the
@@ -244,6 +245,9 @@ func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxy
 	}
 	if alignCLICountTokensShape {
 		body = util.StripClaudeCodeAttributionSystem(body)
+	}
+	if passthroughBody != nil {
+		extraBetas, body = extractAndRemoveBetas(passthroughBody)
 	}
 	// Runs on the finished body: payload rules can rewrite model and messages
 	// long after translation, so an earlier check would not describe the request

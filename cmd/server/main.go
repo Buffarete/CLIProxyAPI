@@ -125,6 +125,8 @@ func main() {
 	var vertexImport string
 	var vertexImportPrefix string
 	var siwcBind string
+	var linkClaudeDirs []string
+	var linkCodexHomes []string
 	var configPath string
 	var password string
 	var homeJWT string
@@ -156,6 +158,8 @@ func main() {
 	flag.StringVar(&vertexImport, "vertex-import", "", "Import Vertex service account key JSON file")
 	flag.StringVar(&vertexImportPrefix, "vertex-import-prefix", "", "Prefix for Vertex model namespacing (use with -vertex-import)")
 	flag.StringVar(&siwcBind, "siwc-bind", "", "Bind Sign in with ChatGPT (SIWC) credentials to a Codex credential file")
+	flag.Func("link-claude-dir", "Link a Claude Code config dir as a credential that reads and refreshes its token in place (repeatable, comma-separated)", appendCSV(&linkClaudeDirs))
+	flag.Func("link-codex-home", "Link a Codex home as a credential that reads and refreshes its token in place (repeatable, comma-separated)", appendCSV(&linkCodexHomes))
 	flag.StringVar(&password, "password", "", "")
 	flag.StringVar(&homeJWT, "home-jwt", "", "Home control plane JWT for mTLS certificate bootstrap and connection")
 	flag.BoolVar(&homeDisableClusterDiscovery, "home-disable-cluster-discovery", false, "Disable Home CLUSTER NODES discovery and keep using the configured -home-jwt address")
@@ -658,7 +662,8 @@ func main() {
 		CallbackPort: oauthCallbackPort,
 	}
 
-	commandMode := vertexImport != "" || siwcBind != "" || antigravityLogin || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || kimiAILogin || xaiLogin || devinLogin || metaLogin
+	linkMode := len(linkClaudeDirs) > 0 || len(linkCodexHomes) > 0
+	commandMode := linkMode || vertexImport != "" || siwcBind != "" || antigravityLogin || codexLogin || codexDeviceLogin || claudeLogin || kimiLogin || kimiAILogin || xaiLogin || devinLogin || metaLogin
 	cloudConfigMissing := isCloudDeploy && !configFileExists
 	homeMode := configLoadedFromHome || (cfg != nil && cfg.Home.Enabled)
 	exampleAPIKeySafeMode := shouldEnableExampleAPIKeySafeMode(cfg, commandMode, tuiMode, standalone, cloudConfigMissing, homeMode)
@@ -713,7 +718,12 @@ func main() {
 
 	// Handle different command modes based on the provided flags.
 
-	if vertexImport != "" {
+	if linkMode {
+		if errLink := cmd.DoLinkDirs(cfg, linkClaudeDirs, linkCodexHomes); errLink != nil {
+			log.Errorf("link credentials: %v", errLink)
+			os.Exit(1)
+		}
+	} else if vertexImport != "" {
 		// Handle Vertex service account import
 		cmd.DoVertexImport(cfg, vertexImport, vertexImportPrefix)
 	} else if siwcBind != "" {

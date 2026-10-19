@@ -1,0 +1,17 @@
+# Buff Cloud CLI proxy on box: this fork, built to ~/.local/bin/buff-cli-proxy.
+# Install: cp deploy/buff-cli-proxy.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now buff-cli-proxy
+[Unit]
+Description=Buff Cloud CLI proxy (CLIProxyAPI fork)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/.config/buff-cloud/cli-proxy
+# The proxy reads its management key from MANAGEMENT_PASSWORD; Buff Cloud keeps it in its env file as
+# CLI_PROXY_MANAGEMENT_KEY. Only that one line is read, so the env file's other keys stay out of this process.
+ExecStart=/bin/sh -c 'MANAGEMENT_PASSWORD="$$(sed -n "s/^CLI_PROXY_MANAGEMENT_KEY=//p" "$$HOME/.config/buff-cloud/env")" exec "$$HOME/.local/bin/buff-cli-proxy" -config "$$HOME/.config/buff-cloud/cli-proxy/config.yaml"'
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

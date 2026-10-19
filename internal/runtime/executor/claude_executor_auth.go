@@ -20,6 +20,9 @@ const (
 type claudeOAuthProfileFetcher func(context.Context, *cliproxyauth.Auth, string) (*claudeauth.OAuthProfile, error)
 
 func (e *ClaudeExecutor) ShouldPrepareRequestAuth(auth *cliproxyauth.Auth) bool {
+	if helps.LinkedAuthNeedsPrepare(auth) {
+		return true
+	}
 	apiKey, _ := claudeCreds(auth)
 	if !isClaudeOAuthToken(apiKey) || auth == nil {
 		return false
@@ -73,6 +76,11 @@ func isClaudeOAuthScope403(err error) bool {
 }
 
 func (e *ClaudeExecutor) PrepareRequestAuth(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
+	if helps.IsLinkedAuth(auth) {
+		if _, errLinked := helps.PrepareLinkedAuth(ctx, e.cfg, auth); errLinked != nil {
+			return nil, errLinked
+		}
+	}
 	if auth == nil || !e.ShouldPrepareRequestAuth(auth) {
 		return auth, nil
 	}
@@ -148,6 +156,9 @@ func (e *ClaudeExecutor) fetchClaudeOAuthProfile(ctx context.Context, auth *clip
 
 func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	log.Debugf("claude executor: refresh called")
+	if helps.IsLinkedAuth(auth) {
+		return helps.RefreshLinkedAuth(ctx, e.cfg, auth)
+	}
 	if refreshed, handled, err := helps.RefreshAuthViaHome(ctx, e.cfg, auth); handled {
 		return refreshed, err
 	}

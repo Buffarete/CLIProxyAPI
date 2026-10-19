@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -110,7 +111,12 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 		SetMetadata(map[string]any)
 	}
 
-	if handled, errCodex := cliproxyauth.PersistCodexAuthFile(ctx, path, auth); handled {
+	if linked.Dir(auth.Metadata) != "" {
+		// Buff Cloud fork: a linked auth's tokens stay in its dir and in memory.
+		if errLinked := saveLinkedAuthFile(path, auth); errLinked != nil {
+			return "", errLinked
+		}
+	} else if handled, errCodex := cliproxyauth.PersistCodexAuthFile(ctx, path, auth); handled {
 		if errCodex != nil {
 			return "", errCodex
 		}
@@ -362,6 +368,9 @@ func (s *FileTokenStore) readAuthFiles(path, baseDir string) ([]*cliproxyauth.Au
 	}
 	if email, ok := metadata["email"].(string); ok && email != "" {
 		auth.Attributes["email"] = email
+	}
+	if linked.Dir(metadata) != "" {
+		applyLinkedAuth(auth)
 	}
 	cliproxyauth.ApplyCustomHeadersFromMetadata(auth)
 	return []*cliproxyauth.Auth{auth}, nil

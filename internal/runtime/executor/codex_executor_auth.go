@@ -135,6 +135,9 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 		cfg = e.cfg
 	}
 	homeEnabled := cfg != nil && cfg.Home.Enabled
+	if helps.IsLinkedAuth(auth) {
+		return helps.RefreshLinkedAuth(ctx, cfg, auth)
+	}
 	if auth == nil {
 		if refreshed, handled, err := helps.RefreshAuthViaHome(ctx, cfg, auth); handled {
 			return refreshed, err

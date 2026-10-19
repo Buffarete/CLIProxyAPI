@@ -435,6 +435,9 @@ upstream:
 
     # When true, disable Claude request cloaking on OAuth and API-key CLI profiles (the Claude Code CLI disguise and
     # system prompt replacement), so the original system prompt is passed through to Claude as-is.
+    # Buff Cloud fork: true forwards every Claude request as the caller sent it (body and headers), adding only
+    # the credential and, for OAuth, the oauth-2025-04-20 beta; no CLI header profile, beta rewrite, session id,
+    # metadata.user_id or CCH signing is applied.
     # Credential attributes and explicit per-key cloak modes override this shared default.
     # Default false keeps the per-client "auto" behavior (cloak only non-Claude-Code clients).
     # API-key overrides use api-keys.claude[].keys[].cloak.mode.
