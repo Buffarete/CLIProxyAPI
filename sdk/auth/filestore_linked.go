@@ -27,9 +27,11 @@ func saveLinkedAuthFile(path string, auth *cliproxyauth.Auth) error {
 	return nil
 }
 
-// syncLinkedMetadata loads a linked auth's token from its dir into metadata.
-func syncLinkedMetadata(metadata map[string]any) {
-	if err := linked.Sync(metadata); err != nil {
-		log.WithError(err).Warnf("linked auth %s: token not loaded", linked.Dir(metadata))
+// applyLinkedAuth loads a linked auth's token from its dir into metadata
+// (memory only) and gives it the linked refresh lead.
+func applyLinkedAuth(auth *cliproxyauth.Auth) {
+	if err := linked.Sync(auth.Metadata); err != nil {
+		log.WithError(err).Warnf("linked auth %s: token not loaded", linked.Dir(auth.Metadata))
 	}
+	auth.Runtime = linked.Runtime{}
 }

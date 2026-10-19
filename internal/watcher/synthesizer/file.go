@@ -175,10 +175,6 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	if email, _ := metadata["email"].(string); email != "" {
 		label = email
 	}
-	if linked.Dir(metadata) != "" {
-		// Buff Cloud fork: a linked auth file holds no token; load it from the linked dir.
-		label = linkedAuthLabel(metadata, label)
-	}
 	// Use relative path under authDir as ID to stay consistent with the file-based token store.
 	id := fullPath
 	if strings.TrimSpace(ctx.AuthDir) != "" {
@@ -277,6 +273,10 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 				a.Attributes["plan_type"] = codex.DefaultPlanType
 			}
 		}
+	}
+	if linked.Dir(metadata) != "" {
+		// Buff Cloud fork: a linked auth file holds no token; load it from the linked dir.
+		applyLinkedAuth(a)
 	}
 	a.BindFileSnapshot(fullPath, data)
 	return []*coreauth.Auth{a}, nil

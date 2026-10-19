@@ -225,3 +225,14 @@ func (e errRefreshStatus) Error() string {
 func (e errRefreshStatus) StatusCode() int { return e.status }
 
 var errNoToken = errors.New("linked credentials: file holds no OAuth token")
+
+// Runtime is the auth runtime of a linked auth. Its refresh lead replaces the
+// provider's (4 h for Claude, 96 h for Codex) with the CLIs' own 5 minutes, so
+// the proxy rotates a shared login no earlier than Claude Code or Codex would.
+type Runtime struct{}
+
+// RefreshLead is read by the auth manager's refresh scheduler.
+func (Runtime) RefreshLead() *time.Duration {
+	lead := refreshMargin
+	return &lead
+}

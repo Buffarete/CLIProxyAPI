@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 func TestFileSynthesizerLoadsLinkedTokenFromItsDir(t *testing.T) {
@@ -33,5 +34,9 @@ func TestFileSynthesizerLoadsLinkedTokenFromItsDir(t *testing.T) {
 	}
 	if exp, ok := auth.ExpirationTime(); !ok || exp.Unix() != expires/1000 {
 		t.Fatalf("expiry %v %v, want %d", exp, ok, expires/1000)
+	}
+	// The provider default would refresh this hour-old token now; the linked lead waits for the last 5 minutes.
+	if lead := coreauth.ProviderRefreshLead("claude", auth.Runtime); lead == nil || *lead != 5*time.Minute {
+		t.Fatalf("refresh lead %v, want 5m", lead)
 	}
 }
