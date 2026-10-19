@@ -11,6 +11,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
 	kimiauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/kimi"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -173,6 +174,10 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	label := provider
 	if email, _ := metadata["email"].(string); email != "" {
 		label = email
+	}
+	if linked.Dir(metadata) != "" {
+		// Buff Cloud fork: a linked auth file holds no token; load it from the linked dir.
+		label = linkedAuthLabel(metadata, label)
 	}
 	// Use relative path under authDir as ID to stay consistent with the file-based token store.
 	id := fullPath
