@@ -422,11 +422,17 @@ type RoutingConfig struct {
 
 	// Pinned names a credential (its auth ID, the auth file name) that serves every request
 	// of its own provider while it is available. Requests for other providers are unaffected.
-	Pinned string `yaml:"pinned,omitempty" json:"pinned,omitempty"`
+	// No omitempty in yaml: clearing must overwrite a saved pin (a new empty key is still not written).
+	Pinned string `yaml:"pinned" json:"pinned,omitempty"`
 
 	// PinnedFallback lets requests use other credentials when the pinned one is unavailable or
 	// fails. When false, those requests get the pinned credential's error instead. Default: true.
 	PinnedFallback *bool `yaml:"pinned-fallback,omitempty" json:"pinned-fallback,omitempty"`
+
+	// Paused turns the proxy off (Buff Cloud fork): every proxied request gets a 503 while
+	// management and /healthz stay up. Default: false.
+	// No omitempty in yaml, so that turning the proxy back on overwrites a saved true.
+	Paused bool `yaml:"paused" json:"paused,omitempty"`
 
 	// SessionAffinity enables universal session-sticky routing for all clients.
 	// Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
