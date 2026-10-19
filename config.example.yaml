@@ -147,7 +147,17 @@ access:
 
 # Routing strategy for selecting credentials when multiple match.
 routing:
-  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first
+  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, most-room, soonest-reset
+  # most-room and soonest-reset (Buff Cloud fork) read the rate-limit windows each Claude and Codex
+  # credential reported on its last response (Claude 5h/7d utilization, Codex primary/secondary used-percent).
+  # most-room picks the credential whose worst window has the most room left, ties to the least recently used;
+  # a credential not yet heard from counts as full. soonest-reset picks, among credentials with room left, the one
+  # whose weekly window resets first, then the rest by most room. The last observation of each credential is kept
+  # in <auth-dir>/quota-signals.state across restarts.
+  # Pin one credential (its auth ID, the auth file name) for requests of its own provider.
+  # pinned: "linked-claude_3.json"
+  # When false, the pinned provider's requests get the pinned credential's error instead of another credential.
+  # pinned-fallback: true
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
   # For OAuth/file credentials, add a top-level numeric "weight" field to the auth JSON.
