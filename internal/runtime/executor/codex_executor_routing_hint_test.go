@@ -197,7 +197,7 @@ func TestApplyCodexRoutingHint(t *testing.T) {
 	t.Run("replaces a hint that did not come from an operator rule", func(t *testing.T) {
 		headers := http.Header{}
 		headers.Set(codexRoutingHintHeader, "model=gpt-5.4-client")
-		applyCodexRoutingHint(context.Background(), headers, oauth, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
+		applyCodexRoutingHint(context.Background(), nil, headers, oauth, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
 		if got := headers.Get(codexRoutingHintHeader); got != "model=gpt-5.5;tier=priority" {
 			t.Fatalf("routing hint = %q, want %q", got, "model=gpt-5.5;tier=priority")
 		}
@@ -208,7 +208,7 @@ func TestApplyCodexRoutingHint(t *testing.T) {
 		operator.Attributes["header:x-codex-routing-hint"] = "model=operator"
 		headers := http.Header{}
 		headers.Set(codexRoutingHintHeader, "model=operator")
-		applyCodexRoutingHint(context.Background(), headers, operator, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
+		applyCodexRoutingHint(context.Background(), nil, headers, operator, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
 		if got := headers.Get(codexRoutingHintHeader); got != "model=operator" {
 			t.Fatalf("routing hint = %q, want operator value kept", got)
 		}
@@ -219,7 +219,7 @@ func TestApplyCodexRoutingHint(t *testing.T) {
 		operator.Attributes["header:X-Codex-Routing-Hint"] = "$X-Operator-Hint"
 		headers := http.Header{}
 		headers.Set(codexRoutingHintHeader, "model=gpt-5.4-client")
-		applyCodexRoutingHint(context.Background(), headers, operator, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
+		applyCodexRoutingHint(context.Background(), nil, headers, operator, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
 		if got := headers.Get(codexRoutingHintHeader); got != "model=gpt-5.5;tier=priority" {
 			t.Fatalf("routing hint = %q, want %q", got, "model=gpt-5.5;tier=priority")
 		}
@@ -228,7 +228,7 @@ func TestApplyCodexRoutingHint(t *testing.T) {
 	t.Run("leaves API-key requests untouched", func(t *testing.T) {
 		headers := http.Header{}
 		headers.Set(codexRoutingHintHeader, "model=client")
-		applyCodexRoutingHint(context.Background(), headers, codexAPIKeyTestAuth(""), "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
+		applyCodexRoutingHint(context.Background(), nil, headers, codexAPIKeyTestAuth(""), "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
 		if got := headers.Get(codexRoutingHintHeader); got != "model=client" {
 			t.Fatalf("routing hint = %q, want API-key headers unchanged", got)
 		}
@@ -237,7 +237,7 @@ func TestApplyCodexRoutingHint(t *testing.T) {
 	t.Run("drops a forwarded hint when the resolved model is empty", func(t *testing.T) {
 		headers := http.Header{}
 		headers.Set(codexRoutingHintHeader, "model=gpt-5.4-client")
-		applyCodexRoutingHint(context.Background(), headers, oauth, "", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
+		applyCodexRoutingHint(context.Background(), nil, headers, oauth, "", []byte(`{"model":"gpt-5.5","service_tier":"priority"}`), nil)
 		if _, ok := headers[http.CanonicalHeaderKey(codexRoutingHintHeader)]; ok {
 			t.Fatalf("routing hint = %q, want header absent", headers.Get(codexRoutingHintHeader))
 		}
@@ -245,7 +245,7 @@ func TestApplyCodexRoutingHint(t *testing.T) {
 
 	t.Run("ignores a non-string tier", func(t *testing.T) {
 		headers := http.Header{}
-		applyCodexRoutingHint(context.Background(), headers, oauth, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":null}`), nil)
+		applyCodexRoutingHint(context.Background(), nil, headers, oauth, "gpt-5.5", []byte(`{"model":"gpt-5.5","service_tier":null}`), nil)
 		if got := headers.Get(codexRoutingHintHeader); got != "model=gpt-5.5" {
 			t.Fatalf("routing hint = %q, want %q", got, "model=gpt-5.5")
 		}

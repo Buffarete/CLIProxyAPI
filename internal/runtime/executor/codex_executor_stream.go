@@ -103,7 +103,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	}
 	reporter.SetTranslatedReasoningEffort(upstreamBody, to.String())
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg, opts.Headers)
-	applyCodexRoutingHint(ctx, httpReq.Header, auth, baseModel, upstreamBody, opts.Headers)
+	applyCodexRoutingHint(ctx, e.cfg, httpReq.Header, auth, baseModel, upstreamBody, opts.Headers)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {

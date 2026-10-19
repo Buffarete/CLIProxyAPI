@@ -329,8 +329,12 @@ const codexRoutingHintHeader = "X-Codex-Routing-Hint"
 // afterwards. A rule that resolves to nothing falls back to the derived hint.
 // API-key requests are not touched, matching native Codex, which sends no hint
 // to API-key providers.
-func applyCodexRoutingHint(ctx context.Context, headers http.Header, auth *cliproxyauth.Auth, baseModel string, upstreamBody []byte, clientHeaders http.Header) {
+func applyCodexRoutingHint(ctx context.Context, cfg *config.Config, headers http.Header, auth *cliproxyauth.Auth, baseModel string, upstreamBody []byte, clientHeaders http.Header) {
 	if codexAuthUsesAPIKey(auth) || codexUseSIWC(auth) {
+		return
+	}
+	// Buff Cloud fork: with cloaking disabled, never add a native-Codex header the client did not send.
+	if isCodexCloakingDisabled(cfg, auth) && strings.TrimSpace(clientHeaders.Get(codexRoutingHintHeader)) == "" {
 		return
 	}
 	deleteHeaderCaseInsensitive(headers, codexRoutingHintHeader)
