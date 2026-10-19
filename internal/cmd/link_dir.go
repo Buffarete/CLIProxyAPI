@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -16,6 +19,12 @@ func DoLinkDirs(cfg *config.Config, claudeDirs, codexHomes []string) error {
 		return err
 	}
 	link := func(dir string, build func(string) (map[string]any, error)) error {
+		// The shell leaves ~ unexpanded inside a comma-separated list.
+		if rest, ok := strings.CutPrefix(dir, "~/"); ok {
+			if home, errHome := os.UserHomeDir(); errHome == nil {
+				dir = filepath.Join(home, rest)
+			}
+		}
 		metadata, errBuild := build(dir)
 		if errBuild != nil {
 			return fmt.Errorf("link %s: %w", dir, errBuild)
