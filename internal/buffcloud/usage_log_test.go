@@ -72,8 +72,8 @@ func TestUsageLogWritesBuffCloudsSchema(t *testing.T) {
 	})
 	// The image tool's side record reuses the attempt's id and is not a second request.
 	l.HandleUsage(context.Background(), usage.Record{RequestID: "r1", Provider: "codex", AuthID: "linked-codex.json", Model: "gpt-image-1.5"})
-	// A Codex prewarm generates nothing.
-	l.HandleUsage(context.Background(), usage.Record{RequestID: "r2", Provider: "codex", AuthID: "linked-codex.json", Generate: usage.GenerateFlag(false)})
+	// No credential, no row.
+	l.HandleUsage(context.Background(), usage.Record{RequestID: "r2", Provider: "codex"})
 
 	data, err := os.ReadFile(path)
 	if err != nil {

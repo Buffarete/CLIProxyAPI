@@ -72,11 +72,11 @@ func SessionKey(id string) string {
 	return id
 }
 
-// RowFromRecord converts an upstream usage record into a usage.jsonl row. It
-// reports false for records that are not a request Buff Cloud counts: no
-// credential, or a Codex prewarm (generate: false) that produces no answer.
+// RowFromRecord converts an upstream usage record into a usage.jsonl row; it
+// reports false for a record without a credential. A Codex WebSocket prewarm
+// (generate: false) is a row: the backend processes and counts its input.
 func RowFromRecord(record usage.Record) (Row, bool) {
-	if strings.TrimSpace(record.AuthID) == "" || !usage.GenerateEnabled(record.Generate) {
+	if strings.TrimSpace(record.AuthID) == "" {
 		return Row{}, false
 	}
 	provider := ProviderName(record.Provider)
