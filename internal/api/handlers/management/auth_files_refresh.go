@@ -70,8 +70,14 @@ func (h *Handler) RefreshAuthFiles(c *gin.Context) {
 		return
 	}
 
+	// Buff Cloud fork: answer with the credentials list entry, not the in-memory
+	// auth, whose metadata holds the access and refresh tokens.
+	entry := h.buildAuthFileEntry(refreshed, authFileQuotaContext{v8: c.GetBool(ConfigV8ContextKey)})
+	if entry == nil {
+		entry = gin.H{"id": targetAuth.ID}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"ok":   true,
-		"auth": refreshed,
+		"auth": entry,
 	})
 }
