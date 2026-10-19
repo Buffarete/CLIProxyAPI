@@ -1,0 +1,4 @@
+what	why	evidence	result
+Fork CLI Proxy API instead of extending the TypeScript proxy	Will asked for Theo's setup: the same proxy, forked, with routing by reset and Buff Cloud as the dashboard	Theo's video of 2026-10-02 and the buff-cloud docs/ai-proxy.md plan	Buffarete/CLIProxyAPI with upstream remote; phases in docs/buff-cloud/plan.md
+Link to the existing Claude Code and Codex credential files instead of logging in again	T3 Code and routines on box use those dirs directly; a copied refresh token would be spent twice	buff-cloud proxy/accounts.ts did this live for a day with Claude Code's own locks	F1 linked_dir auth files
+Cloaking off and proven off; never disguise a client as Claude Code	Anthropic bans for spoofed harnesses (Thariq, 2026-01-09) and Will chose to route honestly	upstream claude_executor_cloaking.go forges user ids, billing headers and system prompts for non-Claude-Code clients by default	F1 config plus a captured outgoing request
