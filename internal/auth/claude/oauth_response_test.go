@@ -106,3 +106,32 @@ func TestReadClaudeOAuthResponseBodyDecodesAdvertisedEncodings(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeClaudeOAuthEncodingRejectsMalformedBrotli(t *testing.T) {
+	t.Parallel()
+
+	var valid bytes.Buffer
+	brotliWriter := brotli.NewWriter(&valid)
+	if _, errWrite := brotliWriter.Write(bytes.Repeat([]byte(`{"account":{"uuid":"test"}}`), 64)); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	if errClose := brotliWriter.Close(); errClose != nil {
+		t.Fatal(errClose)
+	}
+	truncated := valid.Bytes()[:valid.Len()/2]
+	corrupted := append([]byte(nil), valid.Bytes()...)
+	for i := 1; i < len(corrupted); i += 3 {
+		corrupted[i] ^= 0xff
+	}
+
+	inputs := map[string][]byte{
+		"garbage":   bytes.Repeat([]byte{0xff}, 64),
+		"truncated": truncated,
+		"corrupted": corrupted,
+	}
+	for name, input := range inputs {
+		if _, errDecode := decodeClaudeOAuthEncoding(input, "br"); errDecode == nil {
+			t.Errorf("%s: expected error decoding malformed brotli stream", name)
+		}
+	}
+}
