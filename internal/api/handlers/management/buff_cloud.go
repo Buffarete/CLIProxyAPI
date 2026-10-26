@@ -452,3 +452,47 @@ func epochMs(t time.Time) *int64 {
 	ms := t.UnixMilli()
 	return &ms
 }
+
+// BuffMessages serves GET /v8/management/buff/messages: the messages log,
+// newest first. Filters: before and since (epoch ms), traceId, session, account,
+// q (text) and limit (at most 200). more says whether older rows match too.
+func (h *Handler) BuffMessages(c *gin.Context) {
+	l := buffcloud.DefaultMessagesLog()
+	if l == nil {
+		c.JSON(http.StatusOK, gin.H{"messages": []buffcloud.MessageRow{}, "more": false})
+		return
+	}
+	q := buffcloud.MessageQuery{
+		TraceID: strings.TrimSpace(c.Query("traceId")),
+		Session: strings.TrimSpace(c.Query("session")),
+		Account: strings.TrimSpace(c.Query("account")),
+		Text:    strings.TrimSpace(c.Query("q")),
+	}
+	for name, dst := range map[string]*int64{"before": &q.Before, "since": &q.Since} {
+		if raw := strings.TrimSpace(c.Query(name)); raw != "" {
+			parsed, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": name + " must be epoch milliseconds"})
+				return
+			}
+			*dst = parsed
+		}
+	}
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be a positive number"})
+			return
+		}
+		q.Limit = n
+	}
+	rows, more, err := l.Query(q)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if rows == nil {
+		rows = []buffcloud.MessageRow{}
+	}
+	c.JSON(http.StatusOK, gin.H{"messages": rows, "more": more})
+}

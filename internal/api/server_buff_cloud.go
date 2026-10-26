@@ -26,10 +26,28 @@ func setupBuffCloudUsageLog(configFilePath string) {
 	usage.RegisterNamedPlugin("buff-cloud-usage-log", l)
 }
 
+// setupBuffCloudMessagesLog keeps each request's new messages and reply in
+// messages/<day>.jsonl next to the config file, and returns the middleware that
+// records them.
+func setupBuffCloudMessagesLog(configFilePath string) gin.HandlerFunc {
+	if strings.TrimSpace(configFilePath) == "" {
+		return nil
+	}
+	l := buffcloud.OpenMessagesLog(filepath.Join(filepath.Dir(configFilePath), buffcloud.MessagesDirName), func(traceID string) (buffcloud.Row, bool) {
+		if u := buffcloud.DefaultUsageLog(); u != nil {
+			return u.ByTrace(traceID)
+		}
+		return buffcloud.Row{}, false
+	})
+	buffcloud.SetDefaultMessagesLog(l)
+	return l.Middleware()
+}
+
 func (s *Server) registerBuffCloudRoutes(v8 *gin.RouterGroup) {
 	v8.GET("/buff/accounts", s.mgmt.BuffAccounts)
 	v8.GET("/buff/usage", s.mgmt.BuffUsage)
 	v8.GET("/buff/summary", s.mgmt.BuffSummary)
+	v8.GET("/buff/messages", s.mgmt.BuffMessages)
 	v8.PATCH("/buff/settings", s.mgmt.PatchBuffSettings)
 }
 

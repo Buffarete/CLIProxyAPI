@@ -236,9 +236,12 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// subscribe-config heartbeat connection is healthy.
 	engine.Use(s.homeHeartbeatMiddleware())
 	engine.Use(s.exampleAPIKeySafeModeMiddleware())
-	// Buff Cloud fork: proxy on/off switch and usage.jsonl.
+	// Buff Cloud fork: proxy on/off switch, usage.jsonl and the messages log.
 	engine.Use(s.proxyPausedMiddleware())
 	setupBuffCloudUsageLog(configFilePath)
+	if mw := setupBuffCloudMessagesLog(configFilePath); mw != nil {
+		engine.Use(mw)
+	}
 
 	// Setup routes
 	s.setupRoutes()
