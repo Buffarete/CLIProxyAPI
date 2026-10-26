@@ -33,6 +33,8 @@ const (
 	// names the account; usage records arrive through a queue.
 	usageWait  = 15 * time.Second
 	queryLimit = 200
+	// orderSlack is how long a request can run: rows go in finish order, not start order.
+	orderSlack = time.Hour
 )
 
 // MessageRow is one line of a messages file: what the client added in one
@@ -186,10 +188,19 @@ func (l *MessagesLog) Query(q MessageQuery) ([]MessageRow, bool, error) {
 		if q.Since > 0 && day.AddDate(0, 0, 1).UnixMilli() <= q.Since {
 			break
 		}
-		stop := false
+		stop, past := false, false
 		err := eachLineBackwards(filepath.Join(l.dir, days[i]+".jsonl"), func(line []byte) bool {
 			var row MessageRow
-			if json.Unmarshal(line, &row) != nil || !q.match(row) {
+			if json.Unmarshal(line, &row) != nil {
+				return true
+			}
+			// Rows are written as requests finish, so a row far enough before since
+			// means every older row is too.
+			if q.Since > 0 && row.At < q.Since-orderSlack.Milliseconds() {
+				past = true
+				return false
+			}
+			if !q.match(row) {
 				return true
 			}
 			if len(rows) == q.Limit {
@@ -204,6 +215,9 @@ func (l *MessagesLog) Query(q MessageQuery) ([]MessageRow, bool, error) {
 		}
 		if stop {
 			return rows, true, nil
+		}
+		if past {
+			break
 		}
 	}
 	return rows, false, nil
