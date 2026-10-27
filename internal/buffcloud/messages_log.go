@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	log "github.com/sirupsen/logrus"
 )
@@ -235,6 +236,16 @@ func (w *teeWriter) WriteString(s string) (int, error) {
 	w.keep([]byte(s))
 	return w.ResponseWriter.WriteString(s)
 }
+
+// Flush, FlushError and Unwrap keep a client's disconnect visible to
+// streaming handlers, as the logging package's trace writer does.
+func (w *teeWriter) Flush() { _ = w.FlushError() }
+
+// FlushError forwards the transport's flush error.
+func (w *teeWriter) FlushError() error { return httpwire.FlushResponse(w.ResponseWriter) }
+
+// Unwrap is the wrapped writer.
+func (w *teeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 type errReader struct{ err error }
 

@@ -225,10 +225,10 @@ func (l *UsageLog) remember(row Row) {
 	l.rememberLocked(row)
 }
 
+// rememberLocked keeps the row as its trace's last row, even with no account
+// (a plugin executor's record), so the unrouted middleware sees the request
+// was logged; only an account's last row needs the account.
 func (l *UsageLog) rememberLocked(row Row) {
-	if row.AccountID == "" {
-		return
-	}
 	if row.TraceID != "" {
 		if _, ok := l.byTrace[row.TraceID]; !ok {
 			if len(l.traceRing) >= recentTraces {
@@ -238,6 +238,9 @@ func (l *UsageLog) rememberLocked(row Row) {
 			l.traceRing = append(l.traceRing, row.TraceID)
 		}
 		l.byTrace[row.TraceID] = row
+	}
+	if row.AccountID == "" {
+		return
 	}
 	if prev, ok := l.last[row.AccountID]; !ok || row.At >= prev.At {
 		l.last[row.AccountID] = row

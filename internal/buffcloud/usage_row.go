@@ -137,19 +137,26 @@ func RowFromRecord(record usage.Record) Row {
 // errorTextLimit caps a row's error text, in characters.
 const errorTextLimit = 300
 
+// errorBodyLimit is how much of an error body is looked at, in bytes, so a
+// huge body costs no more than this to clean.
+const errorBodyLimit = 8 << 10
+
 // secretPatterns match strings that look like credentials: provider keys,
 // bearer tokens, JWTs and key=value pairs naming a key or token.
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
 	regexp.MustCompile(`\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}`),
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+`),
-	regexp.MustCompile(`\b(?:AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,})`),
-	regexp.MustCompile(`(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^\s"',}&;]{8,}`),
+	regexp.MustCompile(`\b(?:AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9_.-]{8,})`),
+	regexp.MustCompile(`(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^\s"',}&;]{8,}`),
 }
 
 // ErrorText is an error body as a row keeps it: whitespace collapsed, anything
 // that looks like a key or token replaced, cut to 300 characters.
 func ErrorText(body string) string {
+	if len(body) > errorBodyLimit {
+		body = strings.ToValidUTF8(body[:errorBodyLimit], "")
+	}
 	text := strings.Join(strings.Fields(body), " ")
 	for i, re := range secretPatterns {
 		if i == len(secretPatterns)-1 {

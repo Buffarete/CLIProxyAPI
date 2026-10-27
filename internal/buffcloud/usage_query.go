@@ -24,11 +24,12 @@ const UsageLimitMax = 5000
 var usageFilterFields = map[string]func(Row) string{
 	"account":  func(r Row) string { return r.AccountID },
 	"provider": func(r Row) string { return r.Provider },
-	"model":    func(r Row) string { return derefString(r.Model) },
-	"client":   func(r Row) string { return r.Client },
-	"routine":  func(r Row) string { return r.Routine },
-	"thread":   func(r Row) string { return r.Thread },
-	"session":  func(r Row) string { return derefString(r.SessionKey) },
+	// Rows with no model match "unknown", the key series groups them under.
+	"model":   modelKey,
+	"client":  func(r Row) string { return r.Client },
+	"routine": func(r Row) string { return r.Routine },
+	"thread":  func(r Row) string { return r.Thread },
+	"session": func(r Row) string { return derefString(r.SessionKey) },
 }
 
 // usageQueryParams are the parameters added after `since`; with none of them,

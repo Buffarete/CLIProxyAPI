@@ -209,15 +209,16 @@ Each row is one upstream request, in the schema of buff-cloud's `proxy/types.ts`
 
 Optional fields, left out when empty:
 
-- `error`: for status 400 and above, the start of the error body (300 characters at most), whitespace
-  collapsed, with anything that looks like a key or token (`sk-…`, `Bearer …`, JWTs, `api_key=…`) replaced
-  by `[redacted]`.
+- `error`: for status 400 and above, the start of the error body (its first 8 KB cleaned, 300 characters
+  kept), whitespace collapsed, with anything that looks like a key or token (`sk-…`, `Bearer …`, JWTs,
+  `ya29.…`, `api_key=…`, `"token": "…"`) replaced by `[redacted]`.
 - `ttftMs`: time to the first token. `stream`: true for a streamed response.
 - `tokens.reasoning`: the part of `output` spent on reasoning, when the response says. It is not added to
   the total again.
 - `requestedModel`: the model the client asked for, when it differs from `model` (an alias, or a model the
   upstream answered with another).
-- `endpoint`: the client's path, such as `/v1/messages`.
+- `endpoint`: the client's request path, such as `/v1/messages` or
+  `/v1beta/models/gemini-3-pro:generateContent` (the real path, not the route pattern).
 - `client`, `clientVersion`: from the User-Agent. `claude-cli/x.y` is `Claude Code`; `codex_cli_rs`,
   `codex_exec` and `codex-*` are `Codex`; `opencode` and `pi` keep their names; anything else is the first
   product token as it is (`curl`, `8.5.0`). The client IP is never stored.
@@ -238,7 +239,7 @@ is exactly as above.
 | Param | Meaning |
 | --- | --- |
 | `until` | Epoch ms, exclusive. Default now. |
-| `account`, `provider`, `model`, `client`, `routine`, `thread`, `session` | Exact match. Repeat the param or comma-separate for several values. Prefix a value with `!` to exclude it. |
+| `account`, `provider`, `model`, `client`, `routine`, `thread`, `session` | Exact match. Repeat the param or comma-separate for several values. Prefix a value with `!` to exclude it. `model=unknown` matches rows with no model. |
 | `status` | `ok` (< 400), `error` (≥ 400 and not 429), `429`, or a number. Several and `!` work as above. |
 | `unrouted` | `1` keeps rows with `accountId: ""`. |
 | `limit` | At most 5000. Rows come **newest first**, and `next` is set when more remain. |
