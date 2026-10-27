@@ -223,3 +223,45 @@ func TestParseReserve(t *testing.T) {
 		t.Fatal("a malformed reserve in the auth file holds the account")
 	}
 }
+
+func TestReserveErrorWinsOverTheLastAccountsError(t *testing.T) {
+	last := &Error{Code: "upstream", Message: "503 from the account tried first", HTTPStatus: http.StatusServiceUnavailable}
+	if shouldReturnLastErrorOnPickFailure(false, last, &reserveError{held: []string{"Claude 4 keeps 20% of 7d free"}}) {
+		t.Fatal("a reserve error after a failover gives way to the earlier error")
+	}
+	if !shouldReturnLastErrorOnPickFailure(false, last, &Error{Code: "auth_unavailable"}) {
+		t.Fatal("upstream's rule for other pick errors changed")
+	}
+}
+
+func TestReserveHoldsAnyModelListsPerModelWindows(t *testing.T) {
+	now := roomTestNow
+	a := claudeAuth("a", 0.1, now.Add(time.Hour), 0.2, now.Add(50*time.Hour), now)
+	a.Quota.ObserveResponseHeadersForProvider("claude", http.Header{
+		"Anthropic-Ratelimit-Unified-7d-Utilization":      {"0.2"},
+		"Anthropic-Ratelimit-Unified-7d-Reset":            {epoch(now.Add(50 * time.Hour))},
+		"Anthropic-Ratelimit-Unified-7d_opus-Utilization": {"0.9"},
+		"Anthropic-Ratelimit-Unified-7d_opus-Reset":       {epoch(now.Add(40 * time.Hour))},
+	}, now)
+	withReserve(a, 0.2, nil)
+	holds := ReserveHoldsAnyModel(a, now)
+	if len(holds) != 1 || holds[0].Window != "7d_opus" {
+		t.Fatalf("holds = %+v, want 7d_opus", holds)
+	}
+}
+
+func TestReserveTurnsOffTheSchedulerPaths(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	if m.anyReserveSet() {
+		t.Fatal("an empty manager has a reserve")
+	}
+	if _, err := m.Register(context.Background(), withReserve(&Auth{ID: "a", Provider: "claude"}, 0.2, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if !m.anyReserveSet() {
+		t.Fatal("a registered reserve is not seen")
+	}
+	if _, handled, _ := m.pickViaBuiltinScheduler(context.Background(), schedulerStrategyRoundRobin, "claude", nil, "", cliproxyexecutor.Options{}, nil); handled {
+		t.Fatal("a plugin's built-in scheduler picks while a reserve is set")
+	}
+}

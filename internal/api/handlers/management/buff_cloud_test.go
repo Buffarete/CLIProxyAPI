@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
@@ -51,6 +52,11 @@ type buffTestServer struct {
 
 func newBuffTestServer(t *testing.T, auths ...*coreauth.Auth) *buffTestServer {
 	t.Helper()
+	return newBuffTestServerWithStore(t, nil, auths...)
+}
+
+func newBuffTestServerWithStore(t *testing.T, store coreauth.Store, auths ...*coreauth.Auth) *buffTestServer {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte("config-version: 8\nrouting:\n    strategy: \"most-room\"\n    session-affinity: true\n"), 0o600); err != nil {
@@ -60,7 +66,7 @@ func newBuffTestServer(t *testing.T, auths ...*coreauth.Auth) *buffTestServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := coreauth.NewManager(nil, nil, nil)
+	manager := coreauth.NewManager(store, nil, nil)
 	for _, a := range auths {
 		if _, err := manager.Register(context.Background(), a); err != nil {
 			t.Fatal(err)
@@ -186,7 +192,8 @@ func TestBuffAndRefreshResponsesHoldNoToken(t *testing.T) {
 }
 
 func TestPatchBuffReserveSetsListsAndClears(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "linked-claude_4.json")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "linked-claude_4.json")
 	if err := os.WriteFile(path, []byte(`{"type":"claude"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +204,10 @@ func TestPatchBuffReserveSetsListsAndClears(t *testing.T) {
 		"Anthropic-Ratelimit-Unified-7d-Utilization": {"0.82"},
 		"Anthropic-Ratelimit-Unified-7d-Reset":       {strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10)},
 	}, time.Now())
-	s := newBuffTestServer(t, claude)
+	store := sdkAuth.NewFileTokenStore()
+	store.SetBaseDir(dir)
+	claude.Metadata = map[string]any{"type": "claude"}
+	s := newBuffTestServerWithStore(t, store, claude)
 
 	for _, body := range []string{
 		`{"id":"linked-claude_4.json","reserve":{"all":1}}`,
@@ -221,6 +231,9 @@ func TestPatchBuffReserveSetsListsAndClears(t *testing.T) {
 	stored, _ := s.manager.GetByID("linked-claude_4.json")
 	if coreauth.ReserveOf(stored).For("7d") != 0.2 {
 		t.Fatalf("auth metadata = %v", stored.Metadata)
+	}
+	if onDisk, _ := os.ReadFile(path); !strings.Contains(string(onDisk), `"buff_reserve"`) {
+		t.Fatalf("auth file = %s", onDisk)
 	}
 
 	got = s.do(http.MethodPatch, "/v8/management/buff/reserve", `{"id":"linked-claude_4.json","reserve":null}`, http.StatusOK)

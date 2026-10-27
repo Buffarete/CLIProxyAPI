@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -92,7 +94,8 @@ type buffAccount struct {
 	Codex          *buffCodex `json:"codex,omitempty"`
 	// Reserve is the share of each window kept free; null when none is set.
 	Reserve *coreauth.Reserve `json:"reserve"`
-	// Held lists the windows at their reserve now; the router skips the account while any is.
+	// Held lists the windows at their reserve now. The router skips the account while any
+	// window that binds every request is held; a per-model one (7d_opus) holds only that model.
 	Held []buffReserveHold `json:"held"`
 }
 
@@ -418,6 +421,11 @@ func (h *Handler) PatchBuffReserve(c *gin.Context) {
 			return
 		}
 	}
+	// Modify logs a failed write and carries on, so check the file holds the new value.
+	if err := checkBuffReserveSaved(updated, reserve); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	for _, account := range h.buffAccounts(ctx, time.Now(), false) {
 		if account.ID == updated.ID {
 			c.JSON(http.StatusOK, account)
@@ -425,6 +433,42 @@ func (h *Handler) PatchBuffReserve(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"id": updated.ID})
+}
+
+// checkBuffReserveSaved reads the auth file back and compares its reserve. An
+// auth with no file (a test, a store without files) has nothing to check.
+func checkBuffReserveSaved(auth *coreauth.Auth, want *coreauth.Reserve) error {
+	path := ""
+	if auth.Attributes != nil {
+		path = strings.TrimSpace(auth.Attributes["path"])
+	}
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("the reserve was not saved: %v", err)
+	}
+	var file map[string]any
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return fmt.Errorf("the reserve was not saved: %s is not JSON", filepath.Base(path))
+	}
+	got := coreauth.ReserveOf(&coreauth.Auth{Metadata: file})
+	if want == nil {
+		if !got.IsZero() {
+			return fmt.Errorf("the reserve was not cleared in %s", filepath.Base(path))
+		}
+		return nil
+	}
+	if got.All != want.All || len(got.Windows) != len(want.Windows) {
+		return fmt.Errorf("the reserve was not saved to %s", filepath.Base(path))
+	}
+	for window, v := range want.Windows {
+		if got.Windows[window] != v {
+			return fmt.Errorf("the reserve was not saved to %s", filepath.Base(path))
+		}
+	}
+	return nil
 }
 
 type buffSettingsPatch struct {
@@ -600,7 +644,7 @@ func (h *Handler) buffAccounts(ctx context.Context, now time.Time, withCodexUsag
 			a.Reserve = &reserve
 		}
 		a.Held = []buffReserveHold{}
-		for _, hold := range coreauth.ReserveHolds(auth, "", now) {
+		for _, hold := range coreauth.ReserveHoldsAnyModel(auth, now) {
 			a.Held = append(a.Held, buffReserveHold{Window: hold.Window, Used: hold.Used, Reserve: hold.Reserve, Until: epochMs(hold.Until)})
 		}
 		if ws, ok := authWebsocketsValue(auth); ok {

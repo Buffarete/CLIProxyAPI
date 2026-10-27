@@ -963,6 +963,11 @@ func (m *Manager) pickViaBuiltinScheduler(ctx context.Context, strategy schedule
 	if m == nil || m.scheduler == nil {
 		return nil, false, nil
 	}
+	// Buff Cloud fork: the scheduler's lists do not know the usage reserve, so the
+	// configured selector picks from the filtered candidates instead.
+	if m.anyReserveSet() {
+		return nil, false, nil
+	}
 	providerKey := strings.ToLower(strings.TrimSpace(provider))
 	var selected *Auth
 	var errPick error

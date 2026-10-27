@@ -140,8 +140,9 @@ Fields of each account:
 - `cooldownUntil`: set while the account is cooling down after a limit or error.
 - `reserve`: the share of each window kept free, `{"all": 0.2, "windows": {"7d": 0.3}}`, or `null`. See
   `PATCH /buff/reserve`.
-- `held`: the windows at their reserve now, each `{window, used, reserve, until}`. While the list is not empty
-  the router skips the account. `until` is when that window resets. Per-model windows are left out.
+- `held`: the windows at their reserve now, each `{window, used, reserve, until}`. `until` is when that window
+  resets. While a window that binds every request (`5h`, `7d`, `primary`, `secondary`) is held, the router
+  skips the account. A per-model window (`7d_opus`) holds only requests for that model.
 - `lastStatus`, `lastUsedAt`: from the account's last row in the usage log (last 8 days).
 - `tokenExpiresAt`: for a linked credential, read from the dir's own credentials file.
 - `status`: upstream's `active`, `error` or `disabled`. `statusMessage` appears with errors.
@@ -409,6 +410,10 @@ How the router applies it (`sdk/cliproxy/auth/reserve.go`):
 - A session bound to a held account moves to another account on its next request. A Codex WebSocket drops its
   pinned account in the same way.
 - A per-model window (`7d_opus`) holds only requests for that model family.
+- The scheduler fast path, and a plugin scheduler's hand-off to it, are off while any reserve is set, as they
+  are for a pin. Home mode (`home:` in config.yaml) does not check the reserve; box does not use it.
+- After a failover, the reserve's 403 wins over the error of the account tried first.
+- The endpoint reads the auth file back and answers 500 when the new value did not reach it.
 - When every account that could serve a request is held or cooling down, the request gets a 403 whose message
   names each reserve, for example `Every account for claude-opus-5 is at the reserve set in Buff Cloud:
   Claude 4 keeps 20% of 7d free (81% used, resets 2026-10-29 09:00 UTC). Lower the reserve on Buff Cloud's

@@ -177,6 +177,16 @@ func reserveWindowLength(provider string, quota QuotaState, window string) time.
 // window whose reset has passed counts as empty, as it does for routing. A
 // reading with no reset time counts for one window length after it was taken.
 func ReserveHolds(auth *Auth, model string, now time.Time) []ReserveHold {
+	return reserveHolds(auth, model, false, now)
+}
+
+// ReserveHoldsAnyModel lists every window at its reserve, per-model ones
+// included, for Buff Cloud's account list.
+func ReserveHoldsAnyModel(auth *Auth, now time.Time) []ReserveHold {
+	return reserveHolds(auth, "", true, now)
+}
+
+func reserveHolds(auth *Auth, model string, anyModel bool, now time.Time) []ReserveHold {
 	reserve := ReserveOf(auth)
 	if reserve.IsZero() {
 		return nil
@@ -188,7 +198,7 @@ func ReserveHolds(auth *Auth, model string, now time.Time) []ReserveHold {
 		if keep <= 0 || room.Used+1e-9 < 1-keep {
 			continue
 		}
-		if family := reserveWindowModel(room.Window); family != "" && (model == "" || !strings.Contains(model, family)) {
+		if family := reserveWindowModel(room.Window); family != "" && !anyModel && (model == "" || !strings.Contains(model, family)) {
 			continue
 		}
 		until := room.ResetsAt
