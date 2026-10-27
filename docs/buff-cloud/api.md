@@ -186,8 +186,49 @@ Each row is one upstream request, in the schema of buff-cloud's `proxy/types.ts`
   request's total for both providers; Codex's cached tokens are taken out of its `input_tokens`.
 - `sessionKey`: the client's own session id, the name of the Claude Code transcript or Codex rollout file.
   A Claude Code subagent's requests carry the parent session's id.
+- `traceId`: the inbound request's id. A messages row with the same `traceId` holds that request's
+  messages (see `GET /buff/messages`).
 - A retry on another account is a second row. A Codex WebSocket session starts with a prewarm request
   (`generate: false`, input tokens only), which is a row of its own; in the example it is the first row.
+
+## GET /buff/messages
+
+What each conversation request added, and the model's reply, from `messages/<YYYY-MM-DD>.jsonl` next to
+the config file. Newest first, at most `limit` rows (200 at most). Files older than 90 days go
+(`BUFF_MESSAGES_KEEP_DAYS` changes that). Requests to `/v1/messages`, `/v1/chat/completions` and
+`/v1/responses` over HTTP are kept; Codex's WebSocket sessions are not.
+
+```http
+GET /v8/management/buff/messages?before=1792424590000&session=7f1c...&account=linked-claude.json&q=deploy&limit=50
+Authorization: Bearer <management-key>
+```
+
+Every filter is optional: `before` (exclusive) and `since` are epoch ms, `traceId` picks one request,
+`session` a client session, `account` an auth file, and `q` matches part text, tool names and the model.
+
+```json
+{
+  "messages": [
+    {
+      "at": 1792424583906, "traceId": "01a17a52-d5a8-7e31-9f2b-478e313b7110", "path": "/v1/messages",
+      "accountId": "linked-claude.json", "provider": "anthropic", "model": "claude-opus-5-5",
+      "status": 200, "ms": 4120, "tokens": { "input": 12, "output": 80, "cacheRead": 90000, "cacheWrite": 400 },
+      "sessionKey": "7f1c...",
+      "input": [{ "kind": "tool_result", "role": "user", "text": "..." }, { "kind": "text", "role": "user", "text": "Now deploy it" }],
+      "output": [{ "kind": "text", "role": "assistant", "text": "Deploying." }, { "kind": "tool_use", "role": "assistant", "name": "Bash", "text": "{\"command\":\"...\"}" }]
+    }
+  ],
+  "more": true
+}
+```
+
+- `input` is only what the client added since the model's last turn: the new user message, or the tool
+  results it sends back. Earlier turns are in earlier rows of the same session.
+- `kind` is `text`, `tool_use`, `tool_result`, `thinking` or `image` (an image is named, not kept).
+- One part keeps at most 16 KB of text and a side at most 64 parts; `truncated` is set when anything was cut.
+- Account, provider, tokens and the served model come from the request's usage row. A request that never
+  reached an account has none of them. Requests refused with 401 or 403 are not kept.
+- `more` is true when older rows match too; ask again with `before` set to the last row's `at`.
 
 ## GET /buff/summary
 

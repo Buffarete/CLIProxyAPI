@@ -40,6 +40,8 @@ type Row struct {
 	Ms         int64   `json:"ms"`
 	Tokens     *Tokens `json:"tokens"`
 	SessionKey *string `json:"sessionKey"`
+	// TraceID is the inbound HTTP request's id, which messages.jsonl rows carry too.
+	TraceID string `json:"traceId,omitempty"`
 }
 
 // ProviderName maps an executor's provider to Buff Cloud's name for it.
@@ -86,6 +88,7 @@ func RowFromRecord(record usage.Record) (Row, bool) {
 		Provider:  provider,
 		Status:    200,
 		Ms:        record.Latency.Milliseconds(),
+		TraceID:   strings.TrimSpace(record.TraceID),
 	}
 	if record.Failed {
 		row.Status = record.Fail.StatusCode

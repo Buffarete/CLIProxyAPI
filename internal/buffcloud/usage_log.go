@@ -36,12 +36,15 @@ type UsageLog struct {
 	// model (Codex's image tool) may publish a second under the same id.
 	seen     map[string]struct{}
 	seenRing []string
+	// byTrace holds the last row of each recent inbound request, for its messages row.
+	byTrace   map[string]Row
+	traceRing []string
 }
 
 // OpenUsageLog returns the log at path, seeded with each account's last row
 // from the file's recent tail.
 func OpenUsageLog(path string) *UsageLog {
-	l := &UsageLog{path: path, last: map[string]Row{}, seen: map[string]struct{}{}}
+	l := &UsageLog{path: path, last: map[string]Row{}, seen: map[string]struct{}{}, byTrace: map[string]Row{}}
 	rows, err := l.Since(time.Now().Add(-lastRowHorizon).UnixMilli())
 	if err != nil {
 		log.WithError(err).Warn("buff-cloud: reading usage log tail")
@@ -109,6 +112,16 @@ func (l *UsageLog) remember(row Row) {
 }
 
 func (l *UsageLog) rememberLocked(row Row) {
+	if row.TraceID != "" {
+		if _, ok := l.byTrace[row.TraceID]; !ok {
+			if len(l.traceRing) >= seenRequestIDs {
+				delete(l.byTrace, l.traceRing[0])
+				l.traceRing = l.traceRing[1:]
+			}
+			l.traceRing = append(l.traceRing, row.TraceID)
+		}
+		l.byTrace[row.TraceID] = row
+	}
 	if prev, ok := l.last[row.AccountID]; !ok || row.At >= prev.At {
 		l.last[row.AccountID] = row
 	}
@@ -119,6 +132,14 @@ func (l *UsageLog) Last(accountID string) (Row, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	row, ok := l.last[accountID]
+	return row, ok
+}
+
+// ByTrace is the last upstream row of a recent inbound request.
+func (l *UsageLog) ByTrace(traceID string) (Row, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	row, ok := l.byTrace[traceID]
 	return row, ok
 }
 
