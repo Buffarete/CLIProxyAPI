@@ -57,6 +57,7 @@ func (s *Server) registerBuffCloudRoutes(v8 *gin.RouterGroup) {
 	v8.GET("/buff/summary", s.mgmt.BuffSummary)
 	v8.GET("/buff/messages", s.mgmt.BuffMessages)
 	v8.PATCH("/buff/settings", s.mgmt.PatchBuffSettings)
+	v8.PATCH("/buff/reserve", s.mgmt.PatchBuffReserve)
 }
 
 // proxyPausedMiddleware answers every proxied request with 403 while

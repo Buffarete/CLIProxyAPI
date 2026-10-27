@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -71,7 +73,7 @@ type buffService struct {
 }
 
 // buffFeatures are this build's feature flags, in the order they were added.
-var buffFeatures = []string{"usage-range", "usage-fields", "usage-client"}
+var buffFeatures = []string{"usage-range", "usage-fields", "usage-client", "usage-reserve"}
 
 type buffCodex struct {
 	// Signals are the x-codex-* headers of the account's last response.
@@ -90,6 +92,18 @@ type buffAccount struct {
 	TokenExpiresAt *int64     `json:"tokenExpiresAt"`
 	Websockets     *bool      `json:"websockets,omitempty"`
 	Codex          *buffCodex `json:"codex,omitempty"`
+	// Reserve is the share of each window kept free; null when none is set.
+	Reserve *coreauth.Reserve `json:"reserve"`
+	// Held lists the windows at their reserve now. The router skips the account while any
+	// window that binds every request is held; a per-model one (7d_opus) holds only that model.
+	Held []buffReserveHold `json:"held"`
+}
+
+type buffReserveHold struct {
+	Window  string  `json:"window"`
+	Used    float64 `json:"used"`
+	Reserve float64 `json:"reserve"`
+	Until   *int64  `json:"until"`
 }
 
 // BuffAccounts serves GET /v8/management/buff/accounts.
@@ -334,6 +348,129 @@ func (h *Handler) PatchBuffSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, h.buffSettings())
 }
 
+// PatchBuffReserve serves PATCH /v8/management/buff/reserve with
+// {"id": "<credential id>", "reserve": {"all": 0.2, "windows": {"7d": 0.3}}},
+// or "reserve": null to clear it. The reserve is written into the credential's
+// auth file, as Enabled is, and the answer is the account as /buff/accounts
+// lists it.
+func (h *Handler) PatchBuffReserve(c *gin.Context) {
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
+		return
+	}
+	var body struct {
+		ID      string          `json:"id"`
+		Reserve json.RawMessage `json:"reserve"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || strings.TrimSpace(body.ID) == "" || len(body.Reserve) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": `body must be {"id": "<credential id>", "reserve": {"all": 0.2} or null}`})
+		return
+	}
+	id := strings.TrimSpace(body.ID)
+	var reserve *coreauth.Reserve
+	if string(body.Reserve) != "null" {
+		parsed, err := coreauth.ParseReserve(body.Reserve)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if !parsed.IsZero() {
+			reserve = &parsed
+		}
+	}
+	target, ok := h.authManager.GetByID(id)
+	if !ok || target == nil || !isAuthFileListable(target) || target.AuthSourceKind() == coreauth.AuthSourceConfig {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no credential %q; use an id from GET /v8/management/buff/accounts", id)})
+		return
+	}
+	if coreauth.IsPluginVirtualAuth(target) {
+		c.JSON(http.StatusConflict, gin.H{"error": errPluginVirtualAuth.Error()})
+		return
+	}
+	ctx := c.Request.Context()
+	updated, committed, err := h.authManager.Modify(ctx, target.ID, target.RegistrationEpoch, func(current *coreauth.Auth) error {
+		if current.Metadata == nil {
+			current.Metadata = make(map[string]any)
+		}
+		if reserve == nil {
+			delete(current.Metadata, coreauth.ReserveMetadataKey)
+			return nil
+		}
+		windows := make(map[string]any, len(reserve.Windows))
+		for window, v := range reserve.Windows {
+			windows[window] = v
+		}
+		value := map[string]any{"all": reserve.All}
+		if len(windows) > 0 {
+			value["windows"] = windows
+		}
+		current.Metadata[coreauth.ReserveMetadataKey] = value
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to save the reserve: %v", err)})
+		return
+	}
+	if !committed || updated == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no credential %q", id)})
+		return
+	}
+	if h.postAuthPersistHook != nil {
+		if errHook := h.postAuthPersistHook(ctx, updated); errHook != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("post-auth persist hook failed: %v", errHook)})
+			return
+		}
+	}
+	// Modify logs a failed write and carries on, so check the file holds the new value.
+	if err := checkBuffReserveSaved(updated, reserve); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	for _, account := range h.buffAccounts(ctx, time.Now(), false) {
+		if account.ID == updated.ID {
+			c.JSON(http.StatusOK, account)
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"id": updated.ID})
+}
+
+// checkBuffReserveSaved reads the auth file back and compares its reserve. An
+// auth with no file (a test, a store without files) has nothing to check.
+func checkBuffReserveSaved(auth *coreauth.Auth, want *coreauth.Reserve) error {
+	path := ""
+	if auth.Attributes != nil {
+		path = strings.TrimSpace(auth.Attributes["path"])
+	}
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("the reserve was not saved: %v", err)
+	}
+	var file map[string]any
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return fmt.Errorf("the reserve was not saved: %s is not JSON", filepath.Base(path))
+	}
+	got := coreauth.ReserveOf(&coreauth.Auth{Metadata: file})
+	if want == nil {
+		if !got.IsZero() {
+			return fmt.Errorf("the reserve was not cleared in %s", filepath.Base(path))
+		}
+		return nil
+	}
+	if got.All != want.All || len(got.Windows) != len(want.Windows) {
+		return fmt.Errorf("the reserve was not saved to %s", filepath.Base(path))
+	}
+	for window, v := range want.Windows {
+		if got.Windows[window] != v {
+			return fmt.Errorf("the reserve was not saved to %s", filepath.Base(path))
+		}
+	}
+	return nil
+}
+
 type buffSettingsPatch struct {
 	strategy       *string
 	pinned         *string
@@ -503,6 +640,13 @@ func (h *Handler) buffAccounts(ctx context.Context, now time.Time, withCodexUsag
 			}
 		}
 		a.TokenExpiresAt = buffTokenExpiry(auth)
+		if reserve := coreauth.ReserveOf(auth); !reserve.IsZero() {
+			a.Reserve = &reserve
+		}
+		a.Held = []buffReserveHold{}
+		for _, hold := range coreauth.ReserveHoldsAnyModel(auth, now) {
+			a.Held = append(a.Held, buffReserveHold{Window: hold.Window, Used: hold.Used, Reserve: hold.Reserve, Until: epochMs(hold.Until)})
+		}
 		if ws, ok := authWebsocketsValue(auth); ok {
 			a.Websockets = &ws
 		}

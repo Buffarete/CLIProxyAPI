@@ -78,6 +78,8 @@ const (
 	blockReasonCooldown
 	blockReasonDisabled
 	blockReasonOther
+	// blockReasonReserve: the credential is at the usage reserve Buff Cloud set (reserve.go).
+	blockReasonReserve
 )
 
 type modelCooldownError struct {
@@ -527,6 +529,9 @@ func getAvailableAuthsWithPriorityMode(auths []*Auth, provider, model string, no
 
 	availableByPriority, cooldownCount, earliest := collectAvailableByPriority(auths, model, now)
 	if len(availableByPriority) == 0 {
+		if errReserve := newReserveError(auths, func(*Auth) string { return model }, model, now); errReserve != nil {
+			return nil, errReserve
+		}
 		if cooldownCount == len(auths) && !earliest.IsZero() {
 			providerForError := provider
 			if providerForError == "mixed" {
@@ -820,7 +825,20 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 	return available[0], nil
 }
 
+// isAuthBlockedForModel is upstream's availability check plus, in the Buff
+// Cloud fork, the credential's usage reserve. The reserve is checked last, so a
+// real cooldown or a disabled credential keeps its own reason.
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {
+	if blocked, reason, next := authBlockedByState(auth, model, now); blocked {
+		return blocked, reason, next
+	}
+	if hold, held := reserveHold(auth, model, now); held {
+		return true, blockReasonReserve, hold.Until
+	}
+	return false, blockReasonNone, time.Time{}
+}
+
+func authBlockedByState(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {
 	if auth == nil {
 		return true, blockReasonOther, time.Time{}
 	}

@@ -593,6 +593,12 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 		lastCandidateErr := latestCandidateErrorForModel(auths, func(candidate *Auth) string {
 			return m.selectionModelForAuth(candidate, routeModel)
 		})
+		// Buff Cloud fork: say which reserve stopped the request.
+		if errReserve := newReserveError(auths, func(candidate *Auth) string {
+			return m.selectionModelForAuth(candidate, routeModel)
+		}, routeModel, now); errReserve != nil {
+			return nil, errReserve
+		}
 
 		if cooldownCount == len(auths) && !earliest.IsZero() {
 			providerForError := provider
@@ -957,6 +963,11 @@ func (m *Manager) pickViaBuiltinScheduler(ctx context.Context, strategy schedule
 	if m == nil || m.scheduler == nil {
 		return nil, false, nil
 	}
+	// Buff Cloud fork: the scheduler's lists do not know the usage reserve, so the
+	// configured selector picks from the filtered candidates instead.
+	if m.anyReserveSet() {
+		return nil, false, nil
+	}
 	providerKey := strings.ToLower(strings.TrimSpace(provider))
 	var selected *Auth
 	var errPick error
@@ -1160,7 +1171,7 @@ func retryRoundAvailabilityForAuth(auth *Auth, model string, now time.Time) (boo
 	if !blocked {
 		return true, time.Time{}
 	}
-	if auth == nil || next.IsZero() || reason == blockReasonDisabled {
+	if auth == nil || next.IsZero() || reason == blockReasonDisabled || reason == blockReasonReserve {
 		return false, time.Time{}
 	}
 	if auth.Quota.Exceeded && auth.Quota.Reason == "credential_quota" && auth.Quota.NextRecoverAt.After(now) {
@@ -1737,6 +1748,10 @@ func (m *Manager) useSchedulerFastPath() bool {
 	}
 	// routing.pinned is applied by the legacy pick paths (Buff Cloud fork).
 	if pinnedID, _ := m.routingPin(); pinnedID != "" {
+		return false
+	}
+	// So is the usage reserve, with its own error.
+	if m.anyReserveSet() {
 		return false
 	}
 	return isBuiltInSelector(m.Selector())

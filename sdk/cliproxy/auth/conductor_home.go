@@ -284,6 +284,12 @@ func shouldReturnLastErrorOnPickFailure(homeMode bool, lastErr error, errPick er
 	if lastErr == nil {
 		return false
 	}
+	// Buff Cloud fork: when the accounts left are held by their reserve, say so
+	// rather than repeat the last account's error.
+	var reserveErr *reserveError
+	if errors.As(errPick, &reserveErr) {
+		return false
+	}
 	if !homeMode {
 		return true
 	}
