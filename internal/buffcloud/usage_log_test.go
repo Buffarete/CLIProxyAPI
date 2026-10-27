@@ -13,9 +13,10 @@ import (
 )
 
 func TestUsageLogAppendsRowsAndReadsThemBackSinceATime(t *testing.T) {
-	path := filepath.Join(t.TempDir(), UsageFileName)
-	l := OpenUsageLog(path)
+	base := t.TempDir()
 	start := time.UnixMilli(1_792_400_000_000)
+	now := func() time.Time { return start.Add(48 * time.Hour) }
+	l := openUsageLog(base, UsageKeepDays, time.UTC, now)
 	// Enough rows to span several 64 KiB chunks when read backwards.
 	for i := 0; i < 2000; i++ {
 		l.HandleUsage(context.Background(), usage.Record{
@@ -29,15 +30,20 @@ func TestUsageLogAppendsRowsAndReadsThemBackSinceATime(t *testing.T) {
 			Detail:      usage.Detail{InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4},
 		})
 	}
-	info, err := os.Stat(path)
+	// 2000 minutes from 2026-10-19 03:33 UTC span two days.
+	days := listDays(filepath.Join(base, UsageDirName))
+	if strings.Join(days, ",") != "2026-10-19,2026-10-20" {
+		t.Fatalf("day files = %v", days)
+	}
+	info, err := os.Stat(filepath.Join(base, UsageDirName, days[0]+".jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.Mode().Perm() != 0o600 {
-		t.Errorf("usage.jsonl mode = %v, want 0600", info.Mode().Perm())
+		t.Errorf("day file mode = %v, want 0600", info.Mode().Perm())
 	}
-	if info.Size() < 3*tailChunk {
-		t.Fatalf("test file is %d bytes; want several chunks", info.Size())
+	if _, err := os.Stat(filepath.Join(base, UsageFileName)); !os.IsNotExist(err) {
+		t.Errorf("legacy usage.jsonl written: %v", err)
 	}
 
 	since := start.Add(1990 * time.Minute).UnixMilli()
@@ -54,7 +60,7 @@ func TestUsageLogAppendsRowsAndReadsThemBackSinceATime(t *testing.T) {
 		t.Fatalf("all rows = %d, %v; want 2000", len(all), err)
 	}
 
-	reopened := OpenUsageLog(path)
+	reopened := openUsageLog(base, UsageKeepDays, time.UTC, now)
 	last, ok := reopened.Last("linked-claude.json")
 	if !ok || last.At != start.Add(1999*time.Minute).UnixMilli() {
 		t.Errorf("reopened log's last row = %+v, %v; want the 2000th", last, ok)
@@ -62,8 +68,8 @@ func TestUsageLogAppendsRowsAndReadsThemBackSinceATime(t *testing.T) {
 }
 
 func TestUsageLogWritesBuffCloudsSchema(t *testing.T) {
-	path := filepath.Join(t.TempDir(), UsageFileName)
-	l := OpenUsageLog(path)
+	base := t.TempDir()
+	l := openUsageLog(base, UsageKeepDays, time.UTC, func() time.Time { return time.UnixMilli(1_792_400_000_123) })
 	l.HandleUsage(context.Background(), usage.Record{
 		RequestID: "r1", Provider: "codex", AuthID: "linked-codex.json", Model: "gpt-6.1-sol",
 		RequestedAt: time.UnixMilli(1_792_400_000_123), Latency: 2345 * time.Millisecond,
@@ -72,16 +78,16 @@ func TestUsageLogWritesBuffCloudsSchema(t *testing.T) {
 	})
 	// The image tool's side record reuses the attempt's id and is not a second request.
 	l.HandleUsage(context.Background(), usage.Record{RequestID: "r1", Provider: "codex", AuthID: "linked-codex.json", Model: "gpt-image-1.5"})
-	// No credential, no row.
-	l.HandleUsage(context.Background(), usage.Record{RequestID: "r2", Provider: "codex"})
+	// No credential: a row with accountId "".
+	l.HandleUsage(context.Background(), usage.Record{RequestID: "r2", Provider: "codex", RequestedAt: time.UnixMilli(1_792_400_000_200), Failed: true, Fail: usage.Failure{StatusCode: 503, Body: "no auth available"}})
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Join(base, UsageDirName, "2026-10-19.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 1 {
-		t.Fatalf("usage.jsonl has %d lines, want 1:\n%s", len(lines), data)
+	if len(lines) != 2 || !strings.Contains(lines[1], `"accountId":"","provider":"openai"`) || !strings.Contains(lines[1], `"error":"no auth available"`) {
+		t.Fatalf("day file has %d lines, want the row and an unrouted row:\n%s", len(lines), data)
 	}
 	var got map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {

@@ -323,3 +323,20 @@ func TestEnrichContextWithSessionHierarchyFromBody(t *testing.T) {
 		t.Fatalf("OpenCode parent_id session = (%q, %q), want (session:opencode-sess-1, session:opencode-root-1)", meta8.SessionID, meta8.ParentSessionID)
 	}
 }
+
+// Buff Cloud fork: the routine and thread tags read off the request survive the
+// handler's fresh metadata.
+func TestGetContextWithCancelKeepsBuffTags(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ginCtx.Request = req.WithContext(logging.WithClientRequestMetadata(req.Context(), logging.ClientRequestMetadata{Routine: "nightly", Thread: "t-1"}))
+
+	handler := &BaseAPIHandler{Cfg: &config.SDKConfig{}}
+	ctx, cancel := handler.GetContextWithCancel(nil, ginCtx, context.Background())
+	defer cancel()
+
+	if meta := logging.GetClientRequestMetadata(ctx); meta.Routine != "nightly" || meta.Thread != "t-1" {
+		t.Fatalf("metadata = %+v", meta)
+	}
+}

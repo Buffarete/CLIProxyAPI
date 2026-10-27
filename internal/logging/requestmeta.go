@@ -23,6 +23,10 @@ type ClientRequestMetadata struct {
 	NodeKind         string
 	IsFork           bool
 	IsCompaction     bool
+	// Routine and Thread are Buff Cloud's X-Buff-Routine and X-Buff-Thread
+	// headers, which are taken off the request so they never go upstream.
+	Routine string
+	Thread  string
 }
 
 type responseStatusHolder struct {

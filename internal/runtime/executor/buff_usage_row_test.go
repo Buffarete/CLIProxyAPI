@@ -30,9 +30,7 @@ func (c *buffRowCapture) HandleUsage(_ context.Context, record usage.Record) {
 	if record.AuthID != c.authID {
 		return
 	}
-	if row, ok := buffcloud.RowFromRecord(record); ok {
-		c.rows <- row
-	}
+	c.rows <- buffcloud.RowFromRecord(record)
 }
 
 func captureBuffRow(t *testing.T, authID string) *buffRowCapture {
@@ -56,7 +54,7 @@ func (c *buffRowCapture) await(t *testing.T) buffcloud.Row {
 
 func rowJSON(t *testing.T, row buffcloud.Row) string {
 	t.Helper()
-	row.At, row.Ms = 0, 0
+	row.At, row.Ms, row.TTFTMs = 0, 0, 0
 	data, err := json.Marshal(row)
 	if err != nil {
 		t.Fatal(err)
@@ -91,7 +89,8 @@ func TestBuffUsageRowFromClaudeStream(t *testing.T) {
 
 	auth := &cliproxyauth.Auth{ID: "linked-claude_3.json", Provider: "claude", Attributes: map[string]string{"api_key": "k", "base_url": server.URL}}
 	started := time.Now()
-	result, err := NewClaudeExecutor(&config.Config{}).ExecuteStream(sessionCtx("claude:6f1c0c2e-0000-4000-8000-000000000000:agent:a981"), auth, cliproxyexecutor.Request{
+	ctx := usage.WithStream(sessionCtx("claude:6f1c0c2e-0000-4000-8000-000000000000:agent:a981"), true)
+	result, err := NewClaudeExecutor(&config.Config{}).ExecuteStream(ctx, auth, cliproxyexecutor.Request{
 		Model:   "claude-opus-5-5",
 		Payload: []byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"ping"}],"stream":true}`),
 	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, ResponseFormat: sdktranslator.FormatClaude, Stream: true})
@@ -106,7 +105,7 @@ func TestBuffUsageRowFromClaudeStream(t *testing.T) {
 
 	row := capture.await(t)
 	want := `{"at":0,"accountId":"linked-claude_3.json","provider":"anthropic","model":"claude-opus-5-5","status":200,"ms":0,` +
-		`"tokens":{"input":3,"output":57,"cacheRead":30000,"cacheWrite":200},"sessionKey":"6f1c0c2e-0000-4000-8000-000000000000"}`
+		`"tokens":{"input":3,"output":57,"cacheRead":30000,"cacheWrite":200},"sessionKey":"6f1c0c2e-0000-4000-8000-000000000000","stream":true}`
 	if got := rowJSON(t, row); got != want {
 		t.Errorf("row = %s\nwant  %s", got, want)
 	}
@@ -168,7 +167,7 @@ func TestBuffUsageRowFromCodexStreamSplitsCachedTokensOutOfInput(t *testing.T) {
 
 	row := capture.await(t)
 	want := `{"at":0,"accountId":"linked-codex.json","provider":"openai","model":"gpt-6.1-sol","status":200,"ms":0,` +
-		`"tokens":{"input":1000,"output":50,"cacheRead":11000,"cacheWrite":0},"sessionKey":"019a0000-0000-7000-8000-000000000001"}`
+		`"tokens":{"input":1000,"output":50,"cacheRead":11000,"cacheWrite":0,"reasoning":20},"sessionKey":"019a0000-0000-7000-8000-000000000001"}`
 	if got := rowJSON(t, row); got != want {
 		t.Errorf("row = %s\nwant  %s", got, want)
 	}
@@ -205,7 +204,8 @@ func TestBuffUsageRowFromErrorHasStatusAndNoTokens(t *testing.T) {
 		t.Fatalf("error = %v, want the upstream 429", err)
 	}
 
-	want := `{"at":0,"accountId":"linked-claude_5.json","provider":"anthropic","model":"claude-opus-5-5","status":429,"ms":0,"tokens":null,"sessionKey":null}`
+	want := `{"at":0,"accountId":"linked-claude_5.json","provider":"anthropic","model":"claude-opus-5-5","status":429,"ms":0,"tokens":null,"sessionKey":null,` +
+		`"error":"{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"limit reached\"}}"}`
 	if got := rowJSON(t, capture.await(t)); got != want {
 		t.Errorf("row = %s\nwant  %s", got, want)
 	}

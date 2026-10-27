@@ -6,6 +6,7 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -65,7 +66,12 @@ type buffService struct {
 	Commit    string `json:"commit"`
 	BuildDate string `json:"buildDate"`
 	StartedAt int64  `json:"startedAt"`
+	// Features names the additions a client may rely on; see docs/buff-cloud/usage-contract.md.
+	Features []string `json:"features"`
 }
+
+// buffFeatures are this build's feature flags, in the order they were added.
+var buffFeatures = []string{"usage-range", "usage-fields", "usage-client"}
 
 type buffCodex struct {
 	// Signals are the x-codex-* headers of the account's last response.
@@ -98,23 +104,142 @@ func (h *Handler) BuffAccounts(c *gin.Context) {
 }
 
 // BuffUsage serves GET /v8/management/buff/usage?since=<epoch ms>; since
-// defaults to 24 hours ago.
+// defaults to 24 hours ago. With only since it answers {since, rows}, every
+// routed row oldest first, as it always has. The newer parameters (until,
+// filters, status, unrouted, limit, cursor) add until and next to the reply.
 func (h *Handler) BuffUsage(c *gin.Context) {
-	since := time.Now().Add(-24 * time.Hour).UnixMilli()
-	if raw := strings.TrimSpace(c.Query("since")); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
+	now := time.Now()
+	values := c.Request.URL.Query()
+	since, ok := buffQueryMs(c, "since", now.Add(-24*time.Hour).UnixMilli())
+	if !ok {
+		return
+	}
+	if !buffcloud.HasUsageQueryParams(values) {
+		rows, err := buffUsageQuery(buffcloud.UsageQuery{Since: since})
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "since must be epoch milliseconds"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
-		since = parsed
+		c.JSON(http.StatusOK, gin.H{"since": since, "rows": rows})
+		return
 	}
-	rows, err := buffUsageRows(since)
+	until, ok := buffQueryMs(c, "until", now.UnixMilli())
+	if !ok {
+		return
+	}
+	filter, err := buffcloud.ParseUsageFilter(values)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	q := buffcloud.UsageQuery{Since: since, Until: until, Filter: filter, Cursor: strings.TrimSpace(values.Get("cursor"))}
+	if raw := strings.TrimSpace(values.Get("limit")); raw != "" {
+		n, errAtoi := strconv.Atoi(raw)
+		if errAtoi != nil || n < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be a positive number"})
+			return
+		}
+		q.Limit = min(n, buffcloud.UsageLimitMax)
+	}
+	if q.Cursor != "" && q.Limit == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cursor needs limit"})
+		return
+	}
+	reply := gin.H{"since": since, "until": until}
+	var next string
+	l := buffcloud.DefaultUsageLog()
+	rows := []buffcloud.Row{}
+	if l != nil {
+		var found []buffcloud.Row
+		found, next, err = l.Query(q)
+		if errors.Is(err, buffcloud.ErrUsageCursor) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if found != nil {
+			rows = found
+		}
+	}
+	reply["rows"] = rows
+	if next != "" {
+		reply["next"] = next
+	}
+	c.JSON(http.StatusOK, reply)
+}
+
+// BuffUsageSeries serves GET /v8/management/buff/usage/series: the filtered
+// rows counted into time buckets and groups. since defaults to 24 hours ago,
+// until to now, bucket to hour, groupBy to none and tz to the box's zone.
+func (h *Handler) BuffUsageSeries(c *gin.Context) {
+	now := time.Now()
+	values := c.Request.URL.Query()
+	since, ok := buffQueryMs(c, "since", now.Add(-24*time.Hour).UnixMilli())
+	if !ok {
+		return
+	}
+	until, ok := buffQueryMs(c, "until", now.UnixMilli())
+	if !ok {
+		return
+	}
+	filter, err := buffcloud.ParseUsageFilter(values)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	q := buffcloud.SeriesQuery{
+		Since: since, Until: until, Filter: filter,
+		Bucket: strings.TrimSpace(values.Get("bucket")), GroupBy: strings.TrimSpace(values.Get("groupBy")),
+		Loc: time.Local,
+	}
+	if q.Bucket == "" {
+		q.Bucket = "hour"
+	}
+	if q.GroupBy == "" {
+		q.GroupBy = "none"
+	}
+	tz := buffcloud.LocalZoneName()
+	if raw := strings.TrimSpace(values.Get("tz")); raw != "" {
+		loc, errLoad := time.LoadLocation(raw)
+		if errLoad != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "tz must be an IANA time zone such as Europe/London"})
+			return
+		}
+		q.Loc, tz = loc, raw
+	}
+	if err := q.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	l := buffcloud.DefaultUsageLog()
+	if l == nil {
+		c.JSON(http.StatusOK, buffcloud.Series{Since: since, Until: until, Bucket: q.Bucket, GroupBy: q.GroupBy, TZ: tz, Buckets: []buffcloud.SeriesBucket{}})
+		return
+	}
+	series, err := l.Series(q)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"since": since, "rows": rows})
+	series.TZ = tz
+	c.JSON(http.StatusOK, series)
+}
+
+// buffQueryMs reads an epoch-ms query parameter, or answers 400.
+func buffQueryMs(c *gin.Context, name string, fallback int64) (int64, bool) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return fallback, true
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": name + " must be epoch milliseconds"})
+		return 0, false
+	}
+	return parsed, true
 }
 
 // BuffSummary serves GET /v8/management/buff/summary?now=<epoch ms>&dayStart=<epoch ms>;
@@ -143,7 +268,7 @@ func (h *Handler) BuffSummary(c *gin.Context) {
 	if hour := now.Add(-time.Hour); hour.Before(since) {
 		since = hour
 	}
-	rows, err := buffUsageRows(since.UnixMilli())
+	rows, err := buffUsageQuery(buffcloud.UsageQuery{Since: since.UnixMilli()})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -163,12 +288,14 @@ func (h *Handler) BuffSummary(c *gin.Context) {
 	c.JSON(http.StatusOK, buffcloud.Summarise(accounts, kept, now, dayStart))
 }
 
-func buffUsageRows(since int64) ([]buffcloud.Row, error) {
+// buffUsageQuery is the routed rows of q, oldest first; rows with no account
+// are left out unless q asks for them.
+func buffUsageQuery(q buffcloud.UsageQuery) ([]buffcloud.Row, error) {
 	l := buffcloud.DefaultUsageLog()
 	if l == nil {
 		return []buffcloud.Row{}, nil
 	}
-	rows, err := l.Since(since)
+	rows, _, err := l.Query(q)
 	if rows == nil {
 		rows = []buffcloud.Row{}
 	}
@@ -325,7 +452,10 @@ func buffServiceInfo() buffService {
 			}
 		}
 	}
-	return buffService{Version: buildinfo.Version, Commit: commit, BuildDate: buildinfo.BuildDate, StartedAt: buffStartedAt.UnixMilli()}
+	return buffService{
+		Version: buildinfo.Version, Commit: commit, BuildDate: buildinfo.BuildDate, StartedAt: buffStartedAt.UnixMilli(),
+		Features: append([]string{}, buffFeatures...),
+	}
 }
 
 // buffAccounts lists every credential, sorted by id. withCodexUsage adds the
