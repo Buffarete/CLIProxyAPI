@@ -52,6 +52,9 @@ type MessageRow struct {
 	Input      []Part  `json:"input"`
 	Output     []Part  `json:"output"`
 	Truncated  bool    `json:"truncated,omitempty"`
+	// Routine and Thread are the request's X-Buff-Routine and X-Buff-Thread tags.
+	Routine string `json:"routine,omitempty"`
+	Thread  string `json:"thread,omitempty"`
 }
 
 // MessagesLog writes and reads the messages files.
@@ -281,6 +284,8 @@ func (l *MessagesLog) Middleware() gin.HandlerFunc {
 		if key := sessionHeader(c.Request.Header); key != "" {
 			row.SessionKey = &key
 		}
+		meta := logging.GetClientRequestMetadata(c.Request.Context())
+		row.Routine, row.Thread = meta.Routine, meta.Thread
 		// A refused client (bad key, proxy turned off) sent nothing worth keeping.
 		if row.Status == http.StatusUnauthorized || row.Status == http.StatusForbidden {
 			return

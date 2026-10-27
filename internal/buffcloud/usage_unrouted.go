@@ -21,6 +21,7 @@ func addRequestContext(ctx context.Context, row *Row) {
 		return
 	}
 	row.Endpoint = endpointOf(ctx)
+	addClientContext(ctx, row)
 }
 
 // endpointOf is the client's path: the handler's "METHOD /path" endpoint
@@ -114,6 +115,3 @@ func (l *UsageLog) writeUnrouted(row Row) {
 		log.WithError(err).Warn("buff-cloud: appending unrouted usage row")
 	}
 }
-
-// addClientContext fills the row's client fields from the request.
-func addClientContext(_ context.Context, _ *Row) {}

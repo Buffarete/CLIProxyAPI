@@ -29,6 +29,10 @@ func setupBuffCloudUsageLog(configFilePath string) gin.HandlerFunc {
 	return l.UnroutedMiddleware()
 }
 
+// buffCloudTagsMiddleware takes X-Buff-Routine and X-Buff-Thread off every
+// request, keeping them for the usage and messages rows.
+func buffCloudTagsMiddleware() gin.HandlerFunc { return buffcloud.TagsMiddleware() }
+
 // setupBuffCloudMessagesLog keeps each request's new messages and reply in
 // messages/<day>.jsonl next to the config file, and returns the middleware that
 // records them.

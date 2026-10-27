@@ -48,7 +48,7 @@ Authorization: Bearer <management-key>
     "commit": "ea9a9efe51c594c499b970ab3d0560549cb50e46",
     "buildDate": "2026-10-19T15:42:56Z",
     "startedAt": 1792424581676,
-    "features": ["usage-range", "usage-fields"]
+    "features": ["usage-range", "usage-fields", "usage-client"]
   },
   "accounts": [
     {
@@ -156,6 +156,7 @@ the key is older than all of them.
 | --- | --- |
 | `usage-range` | Day files, `/buff/usage` filters and pages, `/buff/usage/series`. |
 | `usage-fields` | Rows carry `error`, `ttftMs`, `tokens.reasoning`, `stream`, `requestedModel`, `endpoint`; rows with no account are logged. |
+| `usage-client` | Rows carry `client`, `clientVersion`, `routine`, `thread`. |
 
 ## GET /buff/usage
 
@@ -217,6 +218,11 @@ Optional fields, left out when empty:
 - `requestedModel`: the model the client asked for, when it differs from `model` (an alias, or a model the
   upstream answered with another).
 - `endpoint`: the client's path, such as `/v1/messages`.
+- `client`, `clientVersion`: from the User-Agent. `claude-cli/x.y` is `Claude Code`; `codex_cli_rs`,
+  `codex_exec` and `codex-*` are `Codex`; `opencode` and `pi` keep their names; anything else is the first
+  product token as it is (`curl`, `8.5.0`). The client IP is never stored.
+- `routine`, `thread`: the request's `X-Buff-Routine` and `X-Buff-Thread` headers, trimmed and cut to 120
+  characters. The proxy takes both headers off the request before routing, so they never go upstream.
 
 A model request that fails (400 and above, except 401 and 404) without reaching an account, such as
 "no auth available" or the proxy turned off, is a row with `accountId: ""`, `provider: ""`, `model: null`,
@@ -321,6 +327,7 @@ Every filter is optional: `before` (exclusive) and `since` are epoch ms, `traceI
 - Account, provider, tokens and the served model come from the request's usage row. A request that never
   reached an account has none of them. Requests refused with 401 or 403 are not kept.
 - `more` is true when older rows match too; ask again with `before` set to the last row's `at`.
+- `routine` and `thread` carry the request's `X-Buff-Routine` and `X-Buff-Thread` headers, when sent.
 
 ## GET /buff/summary
 

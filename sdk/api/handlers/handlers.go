@@ -604,6 +604,8 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 	}
 	if c != nil && c.Request != nil {
 		sessionID, parentSessionID := extractSessionIDsFromRequest(c.Request)
+		// Buff Cloud fork: keep the routine and thread tags read off the request.
+		tags := logging.GetClientRequestMetadata(c.Request.Context())
 		newCtx = logging.WithClientRequestMetadata(newCtx, logging.ClientRequestMetadata{
 			ClientIP:         requestClientIP(c.Request),
 			ResolvedClientIP: strings.TrimSpace(c.ClientIP()),
@@ -611,6 +613,8 @@ func (h *BaseAPIHandler) GetContextWithCancel(handler interfaces.APIHandler, c *
 			UserAgent:        strings.TrimSpace(c.Request.UserAgent()),
 			SessionID:        sessionID,
 			ParentSessionID:  parentSessionID,
+			Routine:          tags.Routine,
+			Thread:           tags.Thread,
 		})
 	}
 	newCtx = logging.WithResponseStatusHolder(newCtx)

@@ -172,6 +172,7 @@ func TestMiddlewareRecordsTheTurnWithItsAccount(t *testing.T) {
 	r.Use(func(c *gin.Context) {
 		c.Request = c.Request.WithContext(logging.WithRequestID(c.Request.Context(), "trace-1"))
 	})
+	r.Use(TagsMiddleware())
 	r.Use(l.Middleware())
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
 		body := make([]byte, 64)
@@ -183,6 +184,8 @@ func TestMiddlewareRecordsTheTurnWithItsAccount(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.3","messages":[{"role":"user","content":"ping"}]}`))
 	req.Header.Set("X-Claude-Code-Session-Id", "sess")
+	req.Header.Set(RoutineHeader, "nightly-review")
+	req.Header.Set(ThreadHeader, "thread-9")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if !strings.Contains(w.Body.String(), "pong") {
@@ -201,7 +204,8 @@ func TestMiddlewareRecordsTheTurnWithItsAccount(t *testing.T) {
 		t.Fatal("no row written")
 	}
 	row := rows[0]
-	if row.AccountID != "opencode.json" || row.Provider != "opencode-go" || *row.Model != "glm-5.3" || *row.SessionKey != "sess" || row.Status != 200 {
+	if row.AccountID != "opencode.json" || row.Provider != "opencode-go" || *row.Model != "glm-5.3" || *row.SessionKey != "sess" || row.Status != 200 ||
+		row.Routine != "nightly-review" || row.Thread != "thread-9" {
 		t.Fatalf("row: %+v", row)
 	}
 	if len(row.Input) != 1 || row.Input[0].Text != "ping" || len(row.Output) != 1 || row.Output[0].Text != "pong" {
