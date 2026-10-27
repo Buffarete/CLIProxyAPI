@@ -17,6 +17,7 @@ The examples are real responses from box on 2026-10-19, with email addresses rep
 | GET | `/buff/usage/series` | Usage counted into time buckets and groups. |
 | GET | `/buff/summary?now=<ms>&dayStart=<ms>` | The AI page summary, in one call. |
 | PATCH | `/buff/settings` | Strategy, pin, pin fallback, proxy on or off. |
+| PATCH | `/buff/reserve` | Set or clear one account's usage reserve. |
 | PATCH | `/credentials/status` | Enable or disable one credential (upstream endpoint). |
 | GET | `/healthz` (not under `/v8/management`, no key) | Liveness for the status dot. |
 
@@ -137,6 +138,10 @@ Fields of each account:
   until the proxy has had a response from the account. The router counts a window whose reset has
   passed as empty again; `/buff/summary` shows rooms that way.
 - `cooldownUntil`: set while the account is cooling down after a limit or error.
+- `reserve`: the share of each window kept free, `{"all": 0.2, "windows": {"7d": 0.3}}`, or `null`. See
+  `PATCH /buff/reserve`.
+- `held`: the windows at their reserve now, each `{window, used, reserve, until}`. While the list is not empty
+  the router skips the account. `until` is when that window resets. Per-model windows are left out.
 - `lastStatus`, `lastUsedAt`: from the account's last row in the usage log (last 8 days).
 - `tokenExpiresAt`: for a linked credential, read from the dir's own credentials file.
 - `status`: upstream's `active`, `error` or `disabled`. `statusMessage` appears with errors.
@@ -157,6 +162,7 @@ the key is older than all of them.
 | `usage-range` | Day files, `/buff/usage` filters and pages, `/buff/usage/series`. |
 | `usage-fields` | Rows carry `error`, `ttftMs`, `tokens.reasoning`, `stream`, `requestedModel`, `endpoint`; rows with no account are logged. |
 | `usage-client` | Rows carry `client`, `clientVersion`, `routine`, `thread`. |
+| `usage-reserve` | Accounts carry `reserve` and `held`; `PATCH /buff/reserve`. |
 
 ## GET /buff/usage
 
@@ -375,6 +381,38 @@ Authorization: Bearer <management-key>
 
 The example shows two of the eight accounts. Rooms here are `left` (1 - used), with Codex windows named
 `5h` and `7d`, and a reset that has passed shown as full with no `resetsAt`.
+
+## PATCH /buff/reserve
+
+Sets the part of an account's limits that the proxy keeps free. With `{"all": 0.2}` the router treats the
+account as full once any window reaches 80% used, and uses it again when that window resets. `windows` sets
+one window by name (`5h`, `7d`, `primary`, `secondary`, or a per-model Claude window such as `7d_opus`) and
+wins over `all`; `0` turns the reserve off for that window. Values go from 0 to below 1. `"reserve": null`,
+or values that are all 0, clear it. The reserve is written into the account's auth file (`buff_reserve`),
+beside `disabled`. The answer is the account as `GET /buff/accounts` lists it.
+
+```http
+PATCH /v8/management/buff/reserve
+Authorization: Bearer <management-key>
+Content-Type: application/json
+
+{"id": "linked-claude_4.json", "reserve": {"all": 0.2, "windows": {"5h": 0}}}
+```
+
+How the router applies it (`sdk/cliproxy/auth/reserve.go`):
+
+- The readings are the rate-limit headers of the account's last response, as for routing. A reading can be
+  old, and Claude Code or Codex can use the same login outside the proxy. The proxy's next request to the
+  account then learns the new number, and the account is held from that response on. So the proxy goes past
+  a reserve by at most the requests that were already running.
+- A window whose reset has passed counts as empty. A reading with no reset time counts for one window length.
+- A session bound to a held account moves to another account on its next request. A Codex WebSocket drops its
+  pinned account in the same way.
+- A per-model window (`7d_opus`) holds only requests for that model family.
+- When every account that could serve a request is held or cooling down, the request gets a 403 whose message
+  names each reserve, for example `Every account for claude-opus-5 is at the reserve set in Buff Cloud:
+  Claude 4 keeps 20% of 7d free (81% used, resets 2026-10-29 09:00 UTC). Lower the reserve on Buff Cloud's
+  Usage page to use it now.` `Retry-After` is the first reset.
 
 ## PATCH /buff/settings
 

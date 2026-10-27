@@ -7,8 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -69,6 +71,7 @@ func newBuffTestServer(t *testing.T, auths ...*coreauth.Auth) *buffTestServer {
 	v8 := router.Group("/v8/management", func(c *gin.Context) { c.Set(ConfigV8ContextKey, true) })
 	v8.GET("/buff/accounts", h.BuffAccounts)
 	v8.PATCH("/buff/settings", h.PatchBuffSettings)
+	v8.PATCH("/buff/reserve", h.PatchBuffReserve)
 	v8.POST("/credentials/refresh", h.RefreshAuthFiles)
 	return &buffTestServer{t: t, path: path, router: router, manager: manager}
 }
@@ -179,5 +182,53 @@ func TestBuffAndRefreshResponsesHoldNoToken(t *testing.T) {
 	}
 	if auth, _ := s.manager.GetByID("antigravity-1.json"); auth.Metadata["access_token"] != "refreshed-token" {
 		t.Fatalf("refresh did not run: access_token = %v", auth.Metadata["access_token"])
+	}
+}
+
+func TestPatchBuffReserveSetsListsAndClears(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "linked-claude_4.json")
+	if err := os.WriteFile(path, []byte(`{"type":"claude"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	claude := &coreauth.Auth{ID: "linked-claude_4.json", FileName: "linked-claude_4.json", Provider: "claude", Label: "Claude 4", Attributes: map[string]string{"path": path}}
+	claude.Quota.ObserveResponseHeadersForProvider("claude", http.Header{
+		"Anthropic-Ratelimit-Unified-5h-Utilization": {"0.3"},
+		"Anthropic-Ratelimit-Unified-5h-Reset":       {strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)},
+		"Anthropic-Ratelimit-Unified-7d-Utilization": {"0.82"},
+		"Anthropic-Ratelimit-Unified-7d-Reset":       {strconv.FormatInt(time.Now().Add(48*time.Hour).Unix(), 10)},
+	}, time.Now())
+	s := newBuffTestServer(t, claude)
+
+	for _, body := range []string{
+		`{"id":"linked-claude_4.json","reserve":{"all":1}}`,
+		`{"id":"linked-claude_4.json","reserve":{"percent":20}}`,
+		`{"id":"linked-claude_4.json"}`,
+		`{"reserve":{"all":0.2}}`,
+	} {
+		s.do(http.MethodPatch, "/v8/management/buff/reserve", body, http.StatusBadRequest)
+	}
+	s.do(http.MethodPatch, "/v8/management/buff/reserve", `{"id":"linked-claude_9.json","reserve":{"all":0.2}}`, http.StatusNotFound)
+
+	got := s.do(http.MethodPatch, "/v8/management/buff/reserve", `{"id":"linked-claude_4.json","reserve":{"all":0.2,"windows":{"5h":0.5}}}`, http.StatusOK)
+	reserve, _ := got["reserve"].(map[string]any)
+	if reserve["all"] != 0.2 || reserve["windows"].(map[string]any)["5h"] != 0.5 {
+		t.Fatalf("reserve = %v", got["reserve"])
+	}
+	held, _ := got["held"].([]any)
+	if len(held) != 1 || held[0].(map[string]any)["window"] != "7d" || held[0].(map[string]any)["until"] == nil {
+		t.Fatalf("held = %v, want 7d at 82%% over its 20%% reserve", got["held"])
+	}
+	stored, _ := s.manager.GetByID("linked-claude_4.json")
+	if coreauth.ReserveOf(stored).For("7d") != 0.2 {
+		t.Fatalf("auth metadata = %v", stored.Metadata)
+	}
+
+	got = s.do(http.MethodPatch, "/v8/management/buff/reserve", `{"id":"linked-claude_4.json","reserve":null}`, http.StatusOK)
+	if got["reserve"] != nil || len(got["held"].([]any)) != 0 {
+		t.Fatalf("after clearing: reserve = %v, held = %v", got["reserve"], got["held"])
+	}
+	accounts := s.do(http.MethodGet, "/v8/management/buff/accounts", "", http.StatusOK)
+	if account := accounts["accounts"].([]any)[0].(map[string]any); account["reserve"] != nil {
+		t.Fatalf("accounts after clearing = %v", account)
 	}
 }
