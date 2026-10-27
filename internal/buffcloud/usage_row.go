@@ -16,18 +16,22 @@ type Tokens struct {
 	Output     int64 `json:"output"`
 	CacheRead  int64 `json:"cacheRead"`
 	CacheWrite int64 `json:"cacheWrite"`
+	// Reasoning is the part of Output spent on reasoning, when the response says.
+	Reasoning int64 `json:"reasoning,omitempty"`
 }
 
-// Total is the sum Buff Cloud shows as a request's tokens.
+// Total is the sum Buff Cloud shows as a request's tokens. Reasoning is inside Output.
 func (t Tokens) Total() int64 {
 	return t.Input + t.Output + t.CacheRead + t.CacheWrite
 }
 
+// add sums the four parts; the summary's split leaves reasoning out.
 func (t Tokens) add(o Tokens) Tokens {
-	return Tokens{t.Input + o.Input, t.Output + o.Output, t.CacheRead + o.CacheRead, t.CacheWrite + o.CacheWrite}
+	return Tokens{Input: t.Input + o.Input, Output: t.Output + o.Output, CacheRead: t.CacheRead + o.CacheRead, CacheWrite: t.CacheWrite + o.CacheWrite}
 }
 
-// Row is one line of usage.jsonl: one upstream request.
+// Row is one line of a usage file: one upstream request. Fields after TraceID
+// are optional, so readers of the original schema are unaffected.
 type Row struct {
 	// At is when the request started, epoch ms.
 	At int64 `json:"at"`
@@ -42,6 +46,21 @@ type Row struct {
 	SessionKey *string `json:"sessionKey"`
 	// TraceID is the inbound HTTP request's id, which messages.jsonl rows carry too.
 	TraceID string `json:"traceId,omitempty"`
+	// Error is the start of the upstream error body, for status 400 and above.
+	Error string `json:"error,omitempty"`
+	// TTFTMs is the time to the first token.
+	TTFTMs int64 `json:"ttftMs,omitempty"`
+	Stream bool  `json:"stream,omitempty"`
+	// RequestedModel is the model the client asked for, when it is not Model.
+	RequestedModel string `json:"requestedModel,omitempty"`
+	// Endpoint is the client's path, such as /v1/messages.
+	Endpoint string `json:"endpoint,omitempty"`
+	// Client and ClientVersion come from the User-Agent.
+	Client        string `json:"client,omitempty"`
+	ClientVersion string `json:"clientVersion,omitempty"`
+	// Routine and Thread come from the X-Buff-Routine and X-Buff-Thread headers.
+	Routine string `json:"routine,omitempty"`
+	Thread  string `json:"thread,omitempty"`
 }
 
 // ProviderName maps an executor's provider to Buff Cloud's name for it.

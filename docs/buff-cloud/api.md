@@ -13,7 +13,8 @@ The examples are real responses from box on 2026-10-19, with email addresses rep
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/buff/accounts` | Every credential with its rooms, cooldown, last request and token expiry; settings; service info. |
-| GET | `/buff/usage?since=<ms>` | Usage rows since a time. |
+| GET | `/buff/usage?since=<ms>` | Usage rows since a time; filters and newest-first pages. |
+| GET | `/buff/usage/series` | Usage counted into time buckets and groups. |
 | GET | `/buff/summary?now=<ms>&dayStart=<ms>` | The AI page summary, in one call. |
 | PATCH | `/buff/settings` | Strategy, pin, pin fallback, proxy on or off. |
 | PATCH | `/credentials/status` | Enable or disable one credential (upstream endpoint). |
@@ -46,7 +47,8 @@ Authorization: Bearer <management-key>
     "version": "v8.0.34-24-gea9a9efe",
     "commit": "ea9a9efe51c594c499b970ab3d0560549cb50e46",
     "buildDate": "2026-10-19T15:42:56Z",
-    "startedAt": 1792424581676
+    "startedAt": 1792424581676,
+    "features": ["usage-range"]
   },
   "accounts": [
     {
@@ -135,7 +137,7 @@ Fields of each account:
   until the proxy has had a response from the account. The router counts a window whose reset has
   passed as empty again; `/buff/summary` shows rooms that way.
 - `cooldownUntil`: set while the account is cooling down after a limit or error.
-- `lastStatus`, `lastUsedAt`: from the account's last row in `usage.jsonl` (last 8 days).
+- `lastStatus`, `lastUsedAt`: from the account's last row in the usage log (last 8 days).
 - `tokenExpiresAt`: for a linked credential, read from the dir's own credentials file.
 - `status`: upstream's `active`, `error` or `disabled`. `statusMessage` appears with errors.
 - `codex.signals`: the `x-codex-*` headers of the last Codex response or WebSocket rate-limit event.
@@ -147,10 +149,22 @@ Fields of each account:
 
 `settings.websocket` is true when any Codex credential uses the WebSocket transport.
 
+`service.features` names what this build adds for the Usage page (see `usage-contract.md`). A proxy without
+the key is older than all of them.
+
+| Feature | Meaning |
+| --- | --- |
+| `usage-range` | Day files, `/buff/usage` filters and pages, `/buff/usage/series`. |
+
 ## GET /buff/usage
 
-The rows of `~/.config/buff-cloud/cli-proxy/usage.jsonl` (the config file's directory) for requests that
-started at or after `since`, oldest first. `since` defaults to 24 hours ago.
+The usage log's rows for requests that started at or after `since`, oldest first. `since` defaults to
+24 hours ago. Rows with no account (`accountId: ""`) are left out unless `unrouted=1` is given.
+
+The log is `usage/<YYYY-MM-DD>.jsonl` in the config file's directory (`~/.config/buff-cloud/cli-proxy/`):
+one file per local day, by the day the request started. Day files older than 180 days go
+(`BUFF_USAGE_KEEP_DAYS` changes that). The single `usage.jsonl` older builds wrote is still read, never
+written or deleted; its rows drop out of replies as they pass the same window.
 
 ```http
 GET /v8/management/buff/usage?since=1792424582157
@@ -190,6 +204,65 @@ Each row is one upstream request, in the schema of buff-cloud's `proxy/types.ts`
   messages (see `GET /buff/messages`).
 - A retry on another account is a second row. A Codex WebSocket session starts with a prewarm request
   (`generate: false`, input tokens only), which is a row of its own; in the example it is the first row.
+
+### Filters and pages
+
+Any of these parameters turns on the extended reply `{since, until, rows, next?}`. Without them the reply
+is exactly as above.
+
+| Param | Meaning |
+| --- | --- |
+| `until` | Epoch ms, exclusive. Default now. |
+| `account`, `provider`, `model`, `client`, `routine`, `thread`, `session` | Exact match. Repeat the param or comma-separate for several values. Prefix a value with `!` to exclude it. |
+| `status` | `ok` (< 400), `error` (≥ 400 and not 429), `429`, or a number. Several and `!` work as above. |
+| `unrouted` | `1` keeps rows with `accountId: ""`. |
+| `limit` | At most 5000. Rows come **newest first**, and `next` is set when more remain. |
+| `cursor` | The `next` of the previous page; needs `limit`. |
+
+```http
+GET /v8/management/buff/usage?since=1792364400000&account=!linked-codex.json&status=error,429&limit=100
+```
+
+```json
+{ "since": 1792364400000, "until": 1792424596724, "rows": [ { "at": 1792424583906, "accountId": "linked-claude_4.json", "status": 429, "...": "..." } ], "next": "MTc5MjQyNDU4MzkwNi4x" }
+```
+
+## GET /buff/usage/series
+
+The rows the filters above select, counted into time buckets and groups.
+
+| Param | Meaning |
+| --- | --- |
+| `since`, `until` | Epoch ms. Default the last 24 hours. |
+| filters | As for `/buff/usage`, `unrouted` included. |
+| `bucket` | `5m`, `hour` (default), `day` or `week`. |
+| `groupBy` | `none` (default; one group keyed `all`), `account`, `model`, `provider`, `client`, `routine`, `thread` or `status` (the code, such as `"429"`). |
+| `tz` | IANA zone. Default the box's. Hours and 5 minutes follow the local clock; days start at local midnight, weeks on Monday. |
+
+```http
+GET /v8/management/buff/usage/series?since=1792364400000&bucket=day&groupBy=account&tz=Europe/London
+```
+
+```json
+{
+  "since": 1792364400000, "until": 1792424596724, "bucket": "day", "groupBy": "account", "tz": "Europe/London",
+  "buckets": [
+    { "start": 1792364400000, "groups": [
+      { "key": "linked-claude_4.json", "requests": 2, "errors": 0, "rateLimited": 0,
+        "tokens": { "input": 1174, "output": 19, "cacheRead": 0, "cacheWrite": 26207, "reasoning": 0 },
+        "msP50": 1759, "msP95": 4120, "ttftP50": 0,
+        "models": { "claude-opus-5-5": { "requests": 2, "tokens": { "input": 1174, "output": 19, "cacheRead": 0, "cacheWrite": 26207, "reasoning": 0 } } } }
+    ] }
+  ]
+}
+```
+
+- `errors` counts status ≥ 400 except 429; `rateLimited` counts 429.
+- `msP50`, `msP95` and `ttftP50` are nearest-rank percentiles over the group's rows. `ttftP50` counts only
+  rows with `ttftMs` and is 0 when none has it.
+- `models` splits each group by model (`unknown` for rows with none), so Buff Cloud can price tokens.
+- Groups are sorted by requests, most first. Empty buckets are left out. A range of more than 2,000 buckets
+  is refused with 400.
 
 ## GET /buff/messages
 
@@ -232,7 +305,8 @@ Every filter is optional: `before` (exclusive) and `since` are epoch ms, `traceI
 
 ## GET /buff/summary
 
-What buff-cloud's `src/lib/sources/ai-proxy.ts` `summariseProxy` computes, without `reachable`. Each count
+What buff-cloud's `src/lib/sources/ai-proxy.ts` `summariseProxy` computes, without `reachable`. Rows with no
+account are not counted. Each count
 also has its token `split`, and `todayByModel` counts today's rows by model (`unknown` when a row has
 none). `now` defaults to the current time. `dayStart` defaults to the local midnight before `now`, in
 the proxy's time zone. The last hour is rows that started at or after `now - 1 h`.

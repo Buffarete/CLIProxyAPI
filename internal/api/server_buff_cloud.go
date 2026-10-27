@@ -16,12 +16,12 @@ import (
 // ProxyPausedMessage is what a client gets while routing.paused is set.
 const ProxyPausedMessage = "Buff Cloud has turned this proxy off. Turn it back on from the AI page."
 
-// setupBuffCloudUsageLog writes usage.jsonl next to the config file.
+// setupBuffCloudUsageLog writes usage/<day>.jsonl next to the config file.
 func setupBuffCloudUsageLog(configFilePath string) {
 	if strings.TrimSpace(configFilePath) == "" {
 		return
 	}
-	l := buffcloud.OpenUsageLog(filepath.Join(filepath.Dir(configFilePath), buffcloud.UsageFileName))
+	l := buffcloud.OpenUsageLog(filepath.Dir(configFilePath))
 	buffcloud.SetDefaultUsageLog(l)
 	usage.RegisterNamedPlugin("buff-cloud-usage-log", l)
 }
@@ -46,6 +46,7 @@ func setupBuffCloudMessagesLog(configFilePath string) gin.HandlerFunc {
 func (s *Server) registerBuffCloudRoutes(v8 *gin.RouterGroup) {
 	v8.GET("/buff/accounts", s.mgmt.BuffAccounts)
 	v8.GET("/buff/usage", s.mgmt.BuffUsage)
+	v8.GET("/buff/usage/series", s.mgmt.BuffUsageSeries)
 	v8.GET("/buff/summary", s.mgmt.BuffSummary)
 	v8.GET("/buff/messages", s.mgmt.BuffMessages)
 	v8.PATCH("/buff/settings", s.mgmt.PatchBuffSettings)

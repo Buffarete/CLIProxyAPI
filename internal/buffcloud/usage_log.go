@@ -7,6 +7,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,8 +19,16 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// UsageFileName is the usage log's name in the config file's directory.
-const UsageFileName = "usage.jsonl"
+const (
+	// UsageDirName is the usage log's directory in the config file's directory:
+	// one JSON-lines file per local day, named by the day the request started.
+	UsageDirName = "usage"
+	// UsageFileName is the single usage log older builds wrote. It is read, never
+	// written or deleted, until its rows age past the keep window.
+	UsageFileName = "usage.jsonl"
+	// UsageKeepDays is how long a day's file stays; BUFF_USAGE_KEEP_DAYS overrides it.
+	UsageKeepDays = 180
+)
 
 const (
 	tailChunk = 64 * 1024
@@ -25,10 +37,14 @@ const (
 	seenRequestIDs = 256
 )
 
-// UsageLog appends one row per upstream request to usage.jsonl and remembers
-// each account's last row. It is a usage.Plugin.
+// UsageLog appends one row per upstream request to usage/<day>.jsonl and
+// remembers each account's last row. It is a usage.Plugin.
 type UsageLog struct {
-	path string
+	dir      string
+	legacy   string
+	keepDays int
+	loc      *time.Location
+	now      func() time.Time
 
 	mu   sync.Mutex
 	last map[string]Row
@@ -39,15 +55,47 @@ type UsageLog struct {
 	// byTrace holds the last row of each recent inbound request, for its messages row.
 	byTrace   map[string]Row
 	traceRing []string
+	pruned    string
+
+	legacyMu    sync.Mutex
+	legacyStamp legacyStamp
+	legacyEndMs int64
 }
 
-// OpenUsageLog returns the log at path, seeded with each account's last row
-// from the file's recent tail.
-func OpenUsageLog(path string) *UsageLog {
-	l := &UsageLog{path: path, last: map[string]Row{}, seen: map[string]struct{}{}, byTrace: map[string]Row{}}
-	rows, err := l.Since(time.Now().Add(-lastRowHorizon).UnixMilli())
+// legacyStamp identifies a version of the legacy file, for its cached end.
+type legacyStamp struct {
+	size int64
+	mod  time.Time
+}
+
+// OpenUsageLog returns the log kept in baseDir (the config file's directory):
+// day files in baseDir/usage, and the legacy baseDir/usage.jsonl. It is seeded
+// with each account's last row from the last 8 days of both.
+func OpenUsageLog(baseDir string) *UsageLog {
+	keep := UsageKeepDays
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("BUFF_USAGE_KEEP_DAYS"))); err == nil && n > 0 {
+		keep = n
+	}
+	return openUsageLog(baseDir, keep, time.Local, time.Now)
+}
+
+func openUsageLog(baseDir string, keepDays int, loc *time.Location, now func() time.Time) *UsageLog {
+	l := &UsageLog{
+		dir:      filepath.Join(baseDir, UsageDirName),
+		legacy:   filepath.Join(baseDir, UsageFileName),
+		keepDays: keepDays,
+		loc:      loc,
+		now:      now,
+		last:     map[string]Row{},
+		seen:     map[string]struct{}{},
+		byTrace:  map[string]Row{},
+	}
+	l.mu.Lock()
+	l.pruneLocked(now())
+	l.mu.Unlock()
+	rows, err := l.Range(now().Add(-lastRowHorizon).UnixMilli(), 0)
 	if err != nil {
-		log.WithError(err).Warn("buff-cloud: reading usage log tail")
+		log.WithError(err).Warn("buff-cloud: reading recent usage rows")
 	}
 	for _, row := range rows {
 		l.remember(row)
@@ -69,10 +117,6 @@ func (l *UsageLog) HandleUsage(_ context.Context, record usage.Record) {
 	if !ok {
 		return
 	}
-	line, err := json.Marshal(row)
-	if err != nil {
-		return
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if id := record.RequestID; id != "" {
@@ -81,10 +125,53 @@ func (l *UsageLog) HandleUsage(_ context.Context, record usage.Record) {
 		}
 		l.markSeen(id)
 	}
-	if err := appendLine(l.path, line); err != nil {
+	if err := l.appendLocked(row); err != nil {
 		log.WithError(err).Warn("buff-cloud: appending usage row")
 	}
 	l.rememberLocked(row)
+}
+
+// appendLocked writes the row to the file of the local day it started on and,
+// once a day, removes files past the keep window.
+func (l *UsageLog) appendLocked(row Row) error {
+	line, err := json.Marshal(row)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(l.dir, 0o700); err != nil {
+		return err
+	}
+	l.pruneLocked(l.now())
+	return appendLine(l.fileFor(l.dayOf(row.At)), line)
+}
+
+func (l *UsageLog) dayOf(ms int64) string {
+	return time.UnixMilli(ms).In(l.loc).Format(dayLayout)
+}
+
+func (l *UsageLog) fileFor(day string) string {
+	return filepath.Join(l.dir, day+".jsonl")
+}
+
+// cutoffDay is the oldest day kept.
+func (l *UsageLog) cutoffDay(now time.Time) string {
+	return now.In(l.loc).AddDate(0, 0, -l.keepDays).Format(dayLayout)
+}
+
+func (l *UsageLog) pruneLocked(now time.Time) {
+	today := now.In(l.loc).Format(dayLayout)
+	if today == l.pruned {
+		return
+	}
+	l.pruned = today
+	cutoff := l.cutoffDay(now)
+	for _, day := range listDays(l.dir) {
+		if day < cutoff {
+			if err := os.Remove(l.fileFor(day)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				log.WithError(err).Warn("buff-cloud: removing old usage file")
+			}
+		}
+	}
 }
 
 func appendLine(path string, line []byte) error {
@@ -94,6 +181,24 @@ func appendLine(path string, line []byte) error {
 	}
 	_, errWrite := f.Write(append(line, '\n'))
 	return errors.Join(errWrite, f.Close())
+}
+
+// listDays lists the days with a <day>.jsonl file in dir, oldest first.
+func listDays(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var days []string
+	for _, e := range entries {
+		if day, ok := strings.CutSuffix(e.Name(), ".jsonl"); ok && !e.IsDir() {
+			if _, err := time.Parse(dayLayout, day); err == nil {
+				days = append(days, day)
+			}
+		}
+	}
+	sort.Strings(days)
+	return days
 }
 
 func (l *UsageLog) markSeen(id string) {
@@ -112,6 +217,9 @@ func (l *UsageLog) remember(row Row) {
 }
 
 func (l *UsageLog) rememberLocked(row Row) {
+	if row.AccountID == "" {
+		return
+	}
 	if row.TraceID != "" {
 		if _, ok := l.byTrace[row.TraceID]; !ok {
 			if len(l.traceRing) >= seenRequestIDs {
@@ -144,58 +252,258 @@ func (l *UsageLog) ByTrace(traceID string) (Row, bool) {
 }
 
 // Since returns the rows of requests that started at or after since (epoch ms),
-// oldest first. It reads the file backwards a chunk at a time and stops at a row
-// that finished before since: rows are appended when a request finishes, so
-// every earlier row also finished, and started, before it.
+// oldest first, unrouted rows included.
 func (l *UsageLog) Since(since int64) ([]Row, error) {
-	f, err := os.Open(l.path)
+	return l.Range(since, 0)
+}
+
+// Range returns the rows of requests that started in [since, until) (epoch ms;
+// until 0 means no bound), oldest first, unrouted rows included. It reads only
+// the day files the range covers, and the legacy file only when the range
+// reaches back into it.
+func (l *UsageLog) Range(since, until int64) ([]Row, error) {
+	var rows []Row
+	err := l.scan(since, until, false, func(batch []Row, _ int64) bool {
+		rows = append(rows, batch...)
+		return true
+	})
+	sortRows(rows, false)
+	return rows, err
+}
+
+// scan calls fn with batches of rows in [since, until), in file order inside a
+// batch; fn returns false to stop. Oldest first, each batch is the legacy file
+// or a whole day. Newest first, each batch is a day, with the legacy file's
+// rows added once they may reach that day; complete is the time from which
+// every row has now been given, so fn may stop once it has enough rows at or
+// after it.
+func (l *UsageLog) scan(since, until int64, newestFirst bool, fn func(batch []Row, complete int64) bool) error {
+	since = max(since, l.keepStart())
+	if until > 0 && until <= since {
+		return nil
+	}
+	days := l.daysIn(since, until)
+	legacyEnd, hasLegacy, err := l.legacyEnd()
+	if err != nil {
+		return err
+	}
+	// legacyDue reports whether the legacy file may hold rows at or after ms.
+	legacyDue := func(ms int64) bool { return hasLegacy && legacyEnd >= max(ms, since) }
+	readLegacy := func() ([]Row, error) {
+		hasLegacy = false
+		return l.legacyRange(since, until)
+	}
+	if !newestFirst {
+		if legacyDue(since) {
+			batch, err := readLegacy()
+			if err != nil {
+				return err
+			}
+			if !fn(batch, since) {
+				return nil
+			}
+		}
+		for _, day := range days {
+			batch, err := l.readDay(day, since, until)
+			if err != nil {
+				return err
+			}
+			if !fn(batch, since) {
+				return nil
+			}
+		}
+		return nil
+	}
+	for i := len(days) - 1; i >= 0; i-- {
+		batch, err := l.readDay(days[i], since, until)
+		if err != nil {
+			return err
+		}
+		start := l.dayStart(days[i])
+		if legacyDue(start) {
+			more, err := readLegacy()
+			if err != nil {
+				return err
+			}
+			batch = append(batch, more...)
+		}
+		if !fn(batch, max(start, since)) {
+			return nil
+		}
+	}
+	if legacyDue(since) {
+		batch, err := readLegacy()
+		if err != nil {
+			return err
+		}
+		fn(batch, since)
+	}
+	return nil
+}
+
+// keepStart is the start of the oldest day kept, so the legacy file's old rows
+// age out as day files do.
+func (l *UsageLog) keepStart() int64 {
+	return l.dayStart(l.cutoffDay(l.now()))
+}
+
+func (l *UsageLog) dayStart(day string) int64 {
+	t, err := time.ParseInLocation(dayLayout, day, l.loc)
+	if err != nil {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
+// daysIn lists the day files that can hold rows started in [since, until), oldest first.
+func (l *UsageLog) daysIn(since, until int64) []string {
+	first := l.dayOf(since)
+	last := ""
+	if until > 0 {
+		last = l.dayOf(until - 1)
+	}
+	var days []string
+	for _, day := range listDays(l.dir) {
+		if day >= first && (last == "" || day <= last) {
+			days = append(days, day)
+		}
+	}
+	return days
+}
+
+// readDay returns the day file's rows in [since, until), in file order. A file
+// pruned meanwhile has none.
+func (l *UsageLog) readDay(day string, since, until int64) ([]Row, error) {
+	data, err := os.ReadFile(l.fileFor(day))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	pos := info.Size()
-	var buf []byte
-	for pos > 0 {
-		start := max(0, pos-tailChunk)
-		part := make([]byte, pos-start)
-		if _, err := f.ReadAt(part, start); err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
-		}
-		buf = append(part, buf...)
-		pos = start
-		if pos == 0 {
-			break
-		}
-		// The first line may be cut off; judge by the first whole one.
-		first := bytes.IndexByte(buf, '\n')
-		if first < 0 {
-			continue
-		}
-		next := bytes.IndexByte(buf[first+1:], '\n')
-		if next < 0 {
-			continue
-		}
-		if row, ok := parseRow(buf[first+1 : first+1+next]); ok && row.At+row.Ms < since {
-			break
-		}
-	}
-	if pos > 0 {
-		buf = buf[bytes.IndexByte(buf, '\n')+1:]
-	}
 	var rows []Row
-	for _, line := range bytes.Split(buf, []byte{'\n'}) {
-		if row, ok := parseRow(line); ok && row.At >= since {
+	for len(data) > 0 {
+		line := data
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			line, data = data[:i], data[i+1:]
+		} else {
+			data = nil
+		}
+		if row, ok := parseRow(line); ok && row.At >= since && (until <= 0 || row.At < until) {
 			rows = append(rows, row)
 		}
 	}
 	return rows, nil
+}
+
+// legacyEnd is an upper bound on when the legacy file's requests started: the
+// last row's end, since rows are appended as requests finish. It is cached
+// while the file is unchanged.
+func (l *UsageLog) legacyEnd() (int64, bool, error) {
+	info, err := os.Stat(l.legacy)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	stamp := legacyStamp{size: info.Size(), mod: info.ModTime()}
+	l.legacyMu.Lock()
+	defer l.legacyMu.Unlock()
+	if stamp == l.legacyStamp {
+		return l.legacyEndMs, l.legacyEndMs > 0, nil
+	}
+	end := int64(0)
+	errScan := eachLineBackwards(l.legacy, func(line []byte) bool {
+		if row, ok := parseRow(line); ok {
+			end = max(end, row.At+row.Ms)
+		}
+		// The last whole rows are enough; the first line seen may be cut off.
+		return end == 0
+	})
+	if errScan != nil {
+		return 0, false, errScan
+	}
+	l.legacyStamp, l.legacyEndMs = stamp, end
+	return end, end > 0, nil
+}
+
+// legacyRange returns the legacy file's rows in [since, until), in file order.
+// It reads the file backwards and stops at a row that finished before since:
+// every earlier row also finished, and started, before it.
+func (l *UsageLog) legacyRange(since, until int64) ([]Row, error) {
+	var rows []Row
+	err := eachLineBackwards(l.legacy, func(line []byte) bool {
+		row, ok := parseRow(line)
+		if !ok {
+			return true
+		}
+		if row.At+row.Ms < since {
+			return false
+		}
+		if row.At >= since && (until <= 0 || row.At < until) {
+			rows = append(rows, row)
+		}
+		return true
+	})
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	return rows, err
+}
+
+// sortRows orders rows by start, keeping file order between equal starts.
+func sortRows(rows []Row, newestFirst bool) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if newestFirst {
+			return rows[i].At > rows[j].At
+		}
+		return rows[i].At < rows[j].At
+	})
+}
+
+// eachLineBackwards calls fn with each non-empty line of the file, last first,
+// until fn returns false.
+func eachLineBackwards(path string, fn func([]byte) bool) error {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	pos := info.Size()
+	var rest []byte
+	for pos > 0 {
+		start := max(0, pos-tailChunk)
+		part := make([]byte, pos-start)
+		if _, err := f.ReadAt(part, start); err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		pos = start
+		buf := append(part, rest...)
+		for {
+			nl := bytes.LastIndexByte(buf, '\n')
+			if nl < 0 {
+				break
+			}
+			line := bytes.TrimSpace(buf[nl+1:])
+			buf = buf[:nl]
+			if len(line) > 0 && !fn(line) {
+				return nil
+			}
+		}
+		rest = buf
+	}
+	if line := bytes.TrimSpace(rest); len(line) > 0 {
+		fn(line)
+	}
+	return nil
 }
 
 func parseRow(line []byte) (Row, bool) {
@@ -204,7 +512,7 @@ func parseRow(line []byte) (Row, bool) {
 		return Row{}, false
 	}
 	var row Row
-	if json.Unmarshal(line, &row) != nil || row.AccountID == "" {
+	if json.Unmarshal(line, &row) != nil || row.At == 0 {
 		return Row{}, false
 	}
 	return row, true

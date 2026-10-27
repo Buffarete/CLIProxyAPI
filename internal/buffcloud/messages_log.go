@@ -3,12 +3,10 @@ package buffcloud
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,23 +116,7 @@ func (l *MessagesLog) prune(now time.Time) {
 }
 
 // days lists the days with a file, oldest first.
-func (l *MessagesLog) days() []string {
-	entries, err := os.ReadDir(l.dir)
-	if err != nil {
-		return nil
-	}
-	var days []string
-	for _, e := range entries {
-		name := e.Name()
-		if day, ok := strings.CutSuffix(name, ".jsonl"); ok && !e.IsDir() {
-			if _, err := time.Parse(dayLayout, day); err == nil {
-				days = append(days, day)
-			}
-		}
-	}
-	sort.Strings(days)
-	return days
-}
+func (l *MessagesLog) days() []string { return listDays(l.dir) }
 
 // MessageQuery filters Query. Zero values match everything.
 type MessageQuery struct {
@@ -221,50 +203,6 @@ func (l *MessagesLog) Query(q MessageQuery) ([]MessageRow, bool, error) {
 		}
 	}
 	return rows, false, nil
-}
-
-// eachLineBackwards calls fn with each non-empty line of the file, last first,
-// until fn returns false.
-func eachLineBackwards(path string, fn func([]byte) bool) error {
-	f, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	pos := info.Size()
-	var rest []byte
-	for pos > 0 {
-		start := max(0, pos-tailChunk)
-		part := make([]byte, pos-start)
-		if _, err := f.ReadAt(part, start); err != nil && !errors.Is(err, io.EOF) {
-			return err
-		}
-		pos = start
-		buf := append(part, rest...)
-		for {
-			nl := bytes.LastIndexByte(buf, '\n')
-			if nl < 0 {
-				break
-			}
-			line := bytes.TrimSpace(buf[nl+1:])
-			buf = buf[:nl]
-			if len(line) > 0 && !fn(line) {
-				return nil
-			}
-		}
-		rest = buf
-	}
-	if line := bytes.TrimSpace(rest); len(line) > 0 {
-		fn(line)
-	}
-	return nil
 }
 
 // messagePaths are the routes whose bodies hold a conversation.
