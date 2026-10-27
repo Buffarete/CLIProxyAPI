@@ -35,6 +35,9 @@ const (
 	// lastRowHorizon bounds the startup scan for each account's last request.
 	lastRowHorizon = 8 * 24 * time.Hour
 	seenRequestIDs = 256
+	// recentTraces is how many inbound requests' last rows are kept, enough to
+	// cover every request that finishes while a failed one waits for its row.
+	recentTraces = 2048
 )
 
 // UsageLog appends one row per upstream request to usage/<day>.jsonl and
@@ -56,6 +59,10 @@ type UsageLog struct {
 	byTrace   map[string]Row
 	traceRing []string
 	pruned    string
+
+	// unroutedWait and unroutedPoll pace the wait for a failed request's usage
+	// row before it is logged as unrouted.
+	unroutedWait, unroutedPoll time.Duration
 
 	legacyMu    sync.Mutex
 	legacyStamp legacyStamp
@@ -89,6 +96,9 @@ func openUsageLog(baseDir string, keepDays int, loc *time.Location, now func() t
 		last:     map[string]Row{},
 		seen:     map[string]struct{}{},
 		byTrace:  map[string]Row{},
+
+		unroutedWait: usageWait,
+		unroutedPoll: 250 * time.Millisecond,
 	}
 	l.mu.Lock()
 	l.pruneLocked(now())
@@ -111,12 +121,11 @@ func SetDefaultUsageLog(l *UsageLog) { defaultUsageLog.Store(l) }
 // DefaultUsageLog is the running server's usage log, or nil.
 func DefaultUsageLog() *UsageLog { return defaultUsageLog.Load() }
 
-// HandleUsage appends the record's row as the request finishes.
-func (l *UsageLog) HandleUsage(_ context.Context, record usage.Record) {
-	row, ok := RowFromRecord(record)
-	if !ok {
-		return
-	}
+// HandleUsage appends the record's row as the request finishes. ctx is the
+// request's, which names the client's endpoint.
+func (l *UsageLog) HandleUsage(ctx context.Context, record usage.Record) {
+	row := RowFromRecord(record)
+	addRequestContext(ctx, &row)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if id := record.RequestID; id != "" {
@@ -222,7 +231,7 @@ func (l *UsageLog) rememberLocked(row Row) {
 	}
 	if row.TraceID != "" {
 		if _, ok := l.byTrace[row.TraceID]; !ok {
-			if len(l.traceRing) >= seenRequestIDs {
+			if len(l.traceRing) >= recentTraces {
 				delete(l.byTrace, l.traceRing[0])
 				l.traceRing = l.traceRing[1:]
 			}

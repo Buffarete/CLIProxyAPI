@@ -4,7 +4,9 @@
 package buffcloud
 
 import (
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
@@ -93,33 +95,73 @@ func SessionKey(id string) string {
 	return id
 }
 
-// RowFromRecord converts an upstream usage record into a usage.jsonl row; it
-// reports false for a record without a credential. A Codex WebSocket prewarm
+// RowFromRecord converts an upstream usage record into a usage row. A record
+// without a credential is a row with accountId "". A Codex WebSocket prewarm
 // (generate: false) is a row: the backend processes and counts its input.
-func RowFromRecord(record usage.Record) (Row, bool) {
-	if strings.TrimSpace(record.AuthID) == "" {
-		return Row{}, false
-	}
+func RowFromRecord(record usage.Record) Row {
 	provider := ProviderName(record.Provider)
+	at := record.RequestedAt
+	if at.IsZero() {
+		at = time.Now()
+	}
 	row := Row{
-		At:        record.RequestedAt.UnixMilli(),
-		AccountID: record.AuthID,
+		At:        at.UnixMilli(),
+		AccountID: strings.TrimSpace(record.AuthID),
 		Provider:  provider,
 		Status:    200,
 		Ms:        record.Latency.Milliseconds(),
 		TraceID:   strings.TrimSpace(record.TraceID),
+		TTFTMs:    record.TTFT.Milliseconds(),
+		Stream:    record.Stream,
 	}
 	if record.Failed {
 		row.Status = record.Fail.StatusCode
+		if row.Status >= 400 {
+			row.Error = ErrorText(record.Fail.Body)
+		}
 	}
-	if model := firstNonEmpty(record.ResponseModel, record.Model, record.Alias); model != "" {
+	model := firstNonEmpty(record.ResponseModel, record.Model, record.Alias)
+	if model != "" {
 		row.Model = &model
+	}
+	if requested := strings.TrimSpace(record.Alias); requested != "" && requested != model {
+		row.RequestedModel = requested
 	}
 	if key := SessionKey(record.SessionID); key != "" {
 		row.SessionKey = &key
 	}
 	row.Tokens = tokensOf(provider, record.Detail)
-	return row, true
+	return row
+}
+
+// errorTextLimit caps a row's error text, in characters.
+const errorTextLimit = 300
+
+// secretPatterns match strings that look like credentials: provider keys,
+// bearer tokens, JWTs and key=value pairs naming a key or token.
+var secretPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}`),
+	regexp.MustCompile(`\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}`),
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+`),
+	regexp.MustCompile(`\b(?:AIza[0-9A-Za-z_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,})`),
+	regexp.MustCompile(`(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|password|authorization)["']?\s*[:=]\s*["']?)[^\s"',}&;]{8,}`),
+}
+
+// ErrorText is an error body as a row keeps it: whitespace collapsed, anything
+// that looks like a key or token replaced, cut to 300 characters.
+func ErrorText(body string) string {
+	text := strings.Join(strings.Fields(body), " ")
+	for i, re := range secretPatterns {
+		if i == len(secretPatterns)-1 {
+			text = re.ReplaceAllString(text, "${1}[redacted]")
+		} else {
+			text = re.ReplaceAllString(text, "[redacted]")
+		}
+	}
+	if runes := []rune(text); len(runes) > errorTextLimit {
+		text = string(runes[:errorTextLimit-1]) + "…"
+	}
+	return text
 }
 
 // tokensOf is nil when the response carried no usage. Claude reports cache reads
@@ -129,7 +171,7 @@ func tokensOf(provider string, d usage.Detail) *Tokens {
 	if d.InputTokens == 0 && d.OutputTokens == 0 && d.CacheReadTokens == 0 && d.CacheCreationTokens == 0 {
 		return nil
 	}
-	t := Tokens{Input: d.InputTokens, Output: d.OutputTokens, CacheRead: d.CacheReadTokens, CacheWrite: d.CacheCreationTokens}
+	t := Tokens{Input: d.InputTokens, Output: d.OutputTokens, CacheRead: d.CacheReadTokens, CacheWrite: d.CacheCreationTokens, Reasoning: d.ReasoningTokens}
 	if provider == "openai" {
 		t.Input = max(0, d.InputTokens-d.CacheReadTokens-d.CacheCreationTokens)
 	}

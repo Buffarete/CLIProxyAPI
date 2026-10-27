@@ -16,14 +16,17 @@ import (
 // ProxyPausedMessage is what a client gets while routing.paused is set.
 const ProxyPausedMessage = "Buff Cloud has turned this proxy off. Turn it back on from the AI page."
 
-// setupBuffCloudUsageLog writes usage/<day>.jsonl next to the config file.
-func setupBuffCloudUsageLog(configFilePath string) {
+// setupBuffCloudUsageLog writes usage/<day>.jsonl next to the config file, and
+// returns the middleware that logs requests which failed before reaching an
+// account.
+func setupBuffCloudUsageLog(configFilePath string) gin.HandlerFunc {
 	if strings.TrimSpace(configFilePath) == "" {
-		return
+		return nil
 	}
 	l := buffcloud.OpenUsageLog(filepath.Dir(configFilePath))
 	buffcloud.SetDefaultUsageLog(l)
 	usage.RegisterNamedPlugin("buff-cloud-usage-log", l)
+	return l.UnroutedMiddleware()
 }
 
 // setupBuffCloudMessagesLog keeps each request's new messages and reply in

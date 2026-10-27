@@ -71,7 +71,7 @@ type buffService struct {
 }
 
 // buffFeatures are this build's feature flags, in the order they were added.
-var buffFeatures = []string{"usage-range"}
+var buffFeatures = []string{"usage-range", "usage-fields"}
 
 type buffCodex struct {
 	// Signals are the x-codex-* headers of the account's last response.

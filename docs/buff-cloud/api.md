@@ -48,7 +48,7 @@ Authorization: Bearer <management-key>
     "commit": "ea9a9efe51c594c499b970ab3d0560549cb50e46",
     "buildDate": "2026-10-19T15:42:56Z",
     "startedAt": 1792424581676,
-    "features": ["usage-range"]
+    "features": ["usage-range", "usage-fields"]
   },
   "accounts": [
     {
@@ -155,6 +155,7 @@ the key is older than all of them.
 | Feature | Meaning |
 | --- | --- |
 | `usage-range` | Day files, `/buff/usage` filters and pages, `/buff/usage/series`. |
+| `usage-fields` | Rows carry `error`, `ttftMs`, `tokens.reasoning`, `stream`, `requestedModel`, `endpoint`; rows with no account are logged. |
 
 ## GET /buff/usage
 
@@ -204,6 +205,24 @@ Each row is one upstream request, in the schema of buff-cloud's `proxy/types.ts`
   messages (see `GET /buff/messages`).
 - A retry on another account is a second row. A Codex WebSocket session starts with a prewarm request
   (`generate: false`, input tokens only), which is a row of its own; in the example it is the first row.
+
+Optional fields, left out when empty:
+
+- `error`: for status 400 and above, the start of the error body (300 characters at most), whitespace
+  collapsed, with anything that looks like a key or token (`sk-…`, `Bearer …`, JWTs, `api_key=…`) replaced
+  by `[redacted]`.
+- `ttftMs`: time to the first token. `stream`: true for a streamed response.
+- `tokens.reasoning`: the part of `output` spent on reasoning, when the response says. It is not added to
+  the total again.
+- `requestedModel`: the model the client asked for, when it differs from `model` (an alias, or a model the
+  upstream answered with another).
+- `endpoint`: the client's path, such as `/v1/messages`.
+
+A model request that fails (400 and above, except 401 and 404) without reaching an account, such as
+"no auth available" or the proxy turned off, is a row with `accountId: ""`, `provider: ""`, `model: null`,
+its `status`, `ms`, `traceId`, `endpoint` and `error`. It is written when no upstream row with its trace
+id arrives within 15 seconds. These rows are left out of `/buff/usage`, `/buff/usage/series` and
+`/buff/summary` unless the request has `unrouted=1`.
 
 ### Filters and pages
 
