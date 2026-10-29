@@ -7,6 +7,7 @@ package auth
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
@@ -32,4 +33,22 @@ func (m *Manager) RecheckAuth(ctx context.Context, authID string) (*Auth, error)
 	store.forget(authID)
 	updated, _, err := m.ResetQuota(ctx, authID)
 	return updated, err
+}
+
+// ObserveQuota sets a credential's quota reading from rate-limit headers read
+// outside a request (Claude Code's /usage, Codex wham/usage), as a response
+// with those headers would. It reports false when there is no such credential
+// or the headers hold no quota signal.
+func (m *Manager) ObserveQuota(authID string, headers http.Header, observedAt time.Time) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	auth := m.auths[authID]
+	if auth == nil || !auth.Quota.ObserveResponseHeadersForProvider(auth.Provider, headers, observedAt) {
+		return false
+	}
+	m.quotaSignals.record(auth.ID, auth.Quota)
+	return true
 }

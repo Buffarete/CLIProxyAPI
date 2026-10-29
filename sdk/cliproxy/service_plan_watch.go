@@ -16,9 +16,13 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buffcloud"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
+
+// planWatchReadUsage reads a Claude account's usage; tests replace it.
+var planWatchReadUsage = buffcloud.ReadClaudeUsage
 
 const (
 	planWatchInterval = 2 * time.Minute
@@ -30,10 +34,16 @@ const (
 type planWatch struct {
 	path  string
 	plans map[string]string
+	// read is when each Claude account's usage was last read by the watch.
+	read map[string]time.Time
 }
 
+// planWatchUsageEvery is how often the watch reads a Claude account's usage
+// through Claude Code when no request has brought a reading in that time.
+const planWatchUsageEvery = 3 * time.Hour
+
 func newPlanWatch(authDir string) *planWatch {
-	w := &planWatch{path: filepath.Join(authDir, planStateFileName), plans: map[string]string{}}
+	w := &planWatch{path: filepath.Join(authDir, planStateFileName), plans: map[string]string{}, read: map[string]time.Time{}}
 	if data, err := os.ReadFile(w.path); err == nil {
 		_ = json.Unmarshal(data, &w.plans)
 	}
@@ -53,6 +63,7 @@ func (w *planWatch) check(ctx context.Context, manager *coreauth.Manager) []stri
 		if dir == "" {
 			continue
 		}
+		w.readStale(ctx, manager, auth, dir)
 		plan := linked.ClaudePlan(dir)
 		if plan == "" || plan == w.plans[auth.ID] {
 			continue
@@ -98,4 +109,24 @@ func (s *Service) startPlanWatch(ctx context.Context, authDir string) {
 			}
 		}
 	}()
+}
+
+// readStale reads an account's usage through Claude Code's /usage when its last
+// reading, from a request or from this watch, is over planWatchUsageEvery old,
+// so an idle or spent account still shows and routes on current numbers.
+func (w *planWatch) readStale(ctx context.Context, manager *coreauth.Manager, auth *coreauth.Auth, dir string) {
+	now := time.Now()
+	if now.Sub(auth.Quota.ObservedAt) < planWatchUsageEvery || now.Sub(w.read[auth.ID]) < planWatchUsageEvery || planWatchReadUsage == nil {
+		return
+	}
+	w.read[auth.ID] = now
+	headers, err := planWatchReadUsage(ctx, dir, now)
+	if err != nil {
+		log.Warnf("plan watch: read usage of %s: %v", auth.ID, err)
+		return
+	}
+	if _, err := manager.RecheckAuth(ctx, auth.ID); err == nil {
+		manager.ObserveQuota(auth.ID, headers, now)
+		log.Infof("plan watch: read usage of %s through Claude Code", auth.ID)
+	}
 }
