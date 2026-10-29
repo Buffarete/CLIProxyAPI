@@ -143,6 +143,9 @@ Fields of each account:
 - `held`: the windows at their reserve now, each `{window, used, reserve, until}`. `until` is when that window
   resets. While a window that binds every request (`5h`, `7d`, `primary`, `secondary`) is held, the router
   skips the account. A per-model window (`7d_opus`) holds only requests for that model.
+- `activeSessions`: the sessions that sent a request on the account in the last ten minutes, or `null` when the
+  routing strategy does not count them (only the room strategies do). The paced strategy divides an account's
+  score by one plus this count (`sdk/cliproxy/auth/selector_paced.go`).
 - `lastStatus`, `lastUsedAt`: from the account's last row in the usage log (last 8 days).
 - `tokenExpiresAt`: for a linked credential, read from the dir's own credentials file.
 - `status`: upstream's `active`, `error` or `disabled`. `statusMessage` appears with errors.
@@ -427,7 +430,7 @@ before answering. Nothing is written unless every field is valid. The answer is 
 
 | Field | Values |
 | --- | --- |
-| `strategy` | `most-room`, `soonest-reset`, `round-robin`, `weighted-round-robin`, `fill-first` |
+| `strategy` | `paced`, `most-room`, `soonest-reset`, `round-robin`, `weighted-round-robin`, `fill-first` |
 | `pinned` | an enabled credential's id, or `null` or `""` to clear |
 | `pinnedFallback` | `true`: other accounts serve the pinned provider when the pin cannot. `false`: the request gets the pinned account's error. |
 | `proxyEnabled` | `false`: every proxied request gets a 403. Management and `/healthz` stay up. |
@@ -469,7 +472,7 @@ Rejected writes answer 400 and change nothing:
 ```json
 {"error":"no credential \"linked-claude_9.json\"; use an id from GET /v8/management/buff/accounts"}
 {"error":"credential \"linked-claude_2.json\" is disabled"}
-{"error":"unknown strategy \"cheapest\"; use most-room, soonest-reset, round-robin, weighted-round-robin or fill-first"}
+{"error":"unknown strategy \"cheapest\"; use paced, most-room, soonest-reset, round-robin, weighted-round-robin or fill-first"}
 ```
 
 Turn the proxy off with `{"proxyEnabled": false}` and on with `{"proxyEnabled": true}`. While it is off,

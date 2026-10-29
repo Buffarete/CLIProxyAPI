@@ -78,7 +78,7 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
-	case coreauth.RoomStrategyMostRoom, coreauth.RoomStrategySoonestReset:
+	case coreauth.RoomStrategyMostRoom, coreauth.RoomStrategySoonestReset, coreauth.RoomStrategyPaced:
 		state.strategy = strings.ToLower(strings.TrimSpace(cfg.Routing.Strategy))
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
@@ -100,15 +100,12 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 }
 
 // roomStrategyOnlyChange reports whether next differs from previous only by a
-// switch between the two room strategies (Buff Cloud fork).
+// switch between the room strategies (Buff Cloud fork).
 func roomStrategyOnlyChange(previous *routingRuntimeState, next routingRuntimeState) bool {
 	if previous == nil {
 		return false
 	}
-	isRoom := func(strategy string) bool {
-		return strategy == coreauth.RoomStrategyMostRoom || strategy == coreauth.RoomStrategySoonestReset
-	}
-	if !isRoom(previous.strategy) || !isRoom(next.strategy) {
+	if !coreauth.IsRoomStrategy(previous.strategy) || !coreauth.IsRoomStrategy(next.strategy) {
 		return false
 	}
 	same := *previous
@@ -123,7 +120,7 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
-	case coreauth.RoomStrategyMostRoom, coreauth.RoomStrategySoonestReset:
+	case coreauth.RoomStrategyMostRoom, coreauth.RoomStrategySoonestReset, coreauth.RoomStrategyPaced:
 		selector = coreauth.NewRoomSelector(state.strategy)
 	default:
 		selector = &coreauth.RoundRobinSelector{}

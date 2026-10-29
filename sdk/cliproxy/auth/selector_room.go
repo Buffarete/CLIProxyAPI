@@ -135,14 +135,18 @@ type RoomSelector struct {
 
 	mu         sync.Mutex
 	lastPicked map[string]time.Time
+	// sessions holds each session's last account, for the paced strategy's
+	// active-session counts (selector_paced.go).
+	sessions map[string]pacedSession
 }
 
-// NewRoomSelector returns a selector for RoomStrategyMostRoom or RoomStrategySoonestReset.
+// NewRoomSelector returns a selector for RoomStrategyMostRoom, RoomStrategySoonestReset
+// or RoomStrategyPaced.
 func NewRoomSelector(strategy string) *RoomSelector {
-	if strategy != RoomStrategySoonestReset {
+	if !IsRoomStrategy(strategy) {
 		strategy = RoomStrategyMostRoom
 	}
-	return &RoomSelector{strategy: strategy, now: time.Now, lastPicked: make(map[string]time.Time)}
+	return &RoomSelector{strategy: strategy, now: time.Now, lastPicked: make(map[string]time.Time), sessions: make(map[string]pacedSession)}
 }
 
 // Strategy returns the selector's routing.strategy value.
@@ -164,12 +168,11 @@ func AffinityRoomStrategy(affinity *SessionAffinitySelector) string {
 	return ""
 }
 
-// SetRoomStrategy switches the active room selector between most-room and
-// soonest-reset in place, so a strategy change keeps the session-affinity
+// SetRoomStrategy switches the active room selector between its strategies in place, so a strategy change keeps the session-affinity
 // bindings that replacing the selector would drop. It reports false when the
 // active selector is not a room selector.
 func (m *Manager) SetRoomStrategy(strategy string) bool {
-	if strategy != RoomStrategyMostRoom && strategy != RoomStrategySoonestReset {
+	if !IsRoomStrategy(strategy) {
 		return false
 	}
 	selector := m.Selector()
@@ -196,7 +199,6 @@ type roomCandidate struct {
 
 // Pick implements Selector.
 func (s *RoomSelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
-	_ = opts
 	now := s.now()
 	available, err := getSelectorAvailableAuths(ctx, auths, provider, model, now)
 	if err != nil {
@@ -206,6 +208,11 @@ func (s *RoomSelector) Pick(ctx context.Context, provider, model string, opts cl
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.strategy == RoomStrategyPaced {
+		chosen := s.pickPacedLocked(ctx, model, opts, available, now)
+		s.notePickedLocked(chosen.ID, now)
+		return chosen, nil
+	}
 	candidates := make([]roomCandidate, 0, len(available))
 	for _, auth := range available {
 		rooms := RoomsFromQuota(auth.Provider, auth.Quota)
@@ -222,12 +229,16 @@ func (s *RoomSelector) Pick(ctx context.Context, provider, model string, opts cl
 		}
 	}
 	chosen := candidates[best]
-	s.lastPicked[chosen.auth.ID] = now
-	if len(s.lastPicked) > 4096 {
-		s.lastPicked = map[string]time.Time{chosen.auth.ID: now}
-	}
+	s.notePickedLocked(chosen.auth.ID, now)
 	selectorLogEntry(ctx).Infof("room-routing: %s picked %s (%s) | %s", s.strategy, chosen.auth.ID, chosen.auth.Label, describeRoomCandidates(candidates, now))
 	return chosen.auth, nil
+}
+
+func (s *RoomSelector) notePickedLocked(authID string, now time.Time) {
+	s.lastPicked[authID] = now
+	if len(s.lastPicked) > 4096 {
+		s.lastPicked = map[string]time.Time{authID: now}
+	}
 }
 
 func (s *RoomSelector) better(a, b roomCandidate) bool {
