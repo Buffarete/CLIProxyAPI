@@ -4,19 +4,25 @@ package management
 // buttons.
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buffcloud"
 )
 
 // PostBuffRecheck serves POST /v8/management/buff/recheck. The body names the
 // accounts, {"ids": ["linked-claude_7.json"]}; an empty list or body means every
-// account. Each one's cooldown and last quota reading are cleared, so its next
-// request reads fresh headers, and a Codex account's wham/usage is fetched
-// again now. The answer is GET /buff/accounts' list, read after the recheck,
-// with the time of the recheck.
+// account. All of them are read at once: a Claude account through Claude
+// Code's /usage (no request with its token from the proxy), a Codex account
+// through wham/usage. Each success replaces the account's reading and clears
+// its cooldown; a failure leaves the account as it was. An account read in the
+// last two minutes is not read again. The answer has one result per account
+// ({id, at, cached, error}) and GET /buff/accounts' list after the reads.
 func (h *Handler) PostBuffRecheck(c *gin.Context) {
 	if h.authManager == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
@@ -52,18 +58,93 @@ func (h *Handler) PostBuffRecheck(c *gin.Context) {
 		}
 	}
 	ctx := c.Request.Context()
-	for _, id := range ids {
-		if _, err := h.authManager.RecheckAuth(ctx, id); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "recheck " + id + ": " + err.Error()})
-			return
-		}
-		buffCodexProbe.Forget(id)
+	results := make([]buffRecheckResult, len(ids))
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			results[i] = h.recheckOne(ctx, id, time.Now())
+		}(i, id)
 	}
+	wg.Wait()
 	now := time.Now()
 	c.JSON(http.StatusOK, gin.H{
 		"rechecked":   ids,
+		"results":     results,
 		"recheckedAt": now.UnixMilli(),
 		"settings":    h.buffSettings(),
 		"accounts":    h.buffAccounts(ctx, now, true),
 	})
+}
+
+// buffRecheckFresh is how long a recheck's reading stands: a press within it
+// answers with that reading instead of reading the account again.
+const buffRecheckFresh = 2 * time.Minute
+
+var (
+	buffRecheckMu   sync.Mutex
+	buffRecheckLast = map[string]time.Time{}
+	// buffClaudeUsage reads a Claude account through Claude Code; tests replace it.
+	buffClaudeUsage = buffcloud.ReadClaudeUsage
+)
+
+type buffRecheckResult struct {
+	ID string `json:"id"`
+	// At is when the reading was taken (epoch ms); null when it failed.
+	At     *int64 `json:"at"`
+	Cached bool   `json:"cached,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+// recheckOne reads one account's usage now: a Claude account through Claude
+// Code's /usage in its linked dir, a Codex account through wham/usage. On
+// success its cooldown is cleared and the new reading replaces the old one; on
+// failure the account is left as it was and the error says why.
+func (h *Handler) recheckOne(ctx context.Context, id string, now time.Time) buffRecheckResult {
+	result := buffRecheckResult{ID: id}
+	buffRecheckMu.Lock()
+	last, seen := buffRecheckLast[id]
+	buffRecheckMu.Unlock()
+	if seen && now.Sub(last) < buffRecheckFresh {
+		result.At, result.Cached = epochMs(last), true
+		return result
+	}
+	auth, ok := h.authManager.GetByID(id)
+	if !ok || auth == nil {
+		result.Error = "no account"
+		return result
+	}
+	var headers http.Header
+	switch {
+	case strings.EqualFold(auth.Provider, "claude") && linked.Dir(auth.Metadata) != "":
+		read, err := buffClaudeUsage(ctx, linked.Dir(auth.Metadata), now)
+		if err != nil {
+			result.Error = err.Error()
+			return result
+		}
+		headers = read
+	case strings.EqualFold(auth.Provider, "codex"):
+		buffCodexProbe.Forget(id)
+		usage := buffCodexProbe.Get(ctx, h.buffHTTPClient(auth), id, func() (buffcloud.CodexCredential, error) {
+			return buffCodexCredential(auth)
+		}, now)
+		if usage.Error != "" {
+			result.Error = usage.Error
+			return result
+		}
+		headers = buffcloud.CodexUsageHeaders(usage)
+	}
+	if _, err := h.authManager.RecheckAuth(ctx, id); err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	if headers != nil {
+		h.authManager.ObserveQuota(id, headers, now)
+	}
+	buffRecheckMu.Lock()
+	buffRecheckLast[id] = now
+	buffRecheckMu.Unlock()
+	result.At = epochMs(now)
+	return result
 }

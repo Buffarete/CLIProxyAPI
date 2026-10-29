@@ -3,16 +3,19 @@ package management
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buffcloud"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -291,5 +294,69 @@ func TestPostBuffRecheckClearsCooldownAndAnswersFreshAccounts(t *testing.T) {
 	}
 	if all := s.do(http.MethodPost, "/v8/management/buff/recheck", "", http.StatusOK); len(all["rechecked"].([]any)) != 2 {
 		t.Fatalf("an empty body rechecked %v, want every account", all["rechecked"])
+	}
+}
+
+func TestPostBuffRecheckReadsEveryClaudeAccountThroughClaudeCode(t *testing.T) {
+	dir := t.TempDir()
+	file := func(id string) map[string]string {
+		p := filepath.Join(dir, id)
+		if err := os.WriteFile(p, []byte(`{"type":"claude"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return map[string]string{"path": p}
+	}
+	linkedAuth := func(id, claudeDir string) *coreauth.Auth {
+		return &coreauth.Auth{ID: id, FileName: id, Attributes: file(id), Provider: "claude", Label: id, Metadata: map[string]any{"linked_dir": claudeDir}}
+	}
+	var mu sync.Mutex
+	var readDirs []string
+	buffClaudeUsage = func(_ context.Context, claudeDir string, _ time.Time) (http.Header, error) {
+		mu.Lock()
+		readDirs = append(readDirs, claudeDir)
+		mu.Unlock()
+		if claudeDir == "/home/will/.claude_6" {
+			return nil, errors.New("claude /usage: Not logged in")
+		}
+		return http.Header{"Anthropic-Ratelimit-Unified-5h-Utilization": {"0.21"}, "Anthropic-Ratelimit-Unified-7d-Utilization": {"0.25"}}, nil
+	}
+	t.Cleanup(func() { buffClaudeUsage = buffcloud.ReadClaudeUsage })
+	buffRecheckMu.Lock()
+	buffRecheckLast = map[string]time.Time{}
+	buffRecheckMu.Unlock()
+
+	old := linkedAuth("linked-claude_6.json", "/home/will/.claude_6")
+	old.Quota = coreauth.QuotaState{ObservedAt: time.Now().Add(-time.Hour), Signals: map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "0.9"}}
+	s := newBuffTestServer(t, linkedAuth("linked-claude_3.json", "/home/will/.claude_3"), old)
+	out := s.do(http.MethodPost, "/v8/management/buff/recheck", "", http.StatusOK)
+
+	results := map[string]map[string]any{}
+	for _, r := range out["results"].([]any) {
+		m := r.(map[string]any)
+		results[m["id"].(string)] = m
+	}
+	if results["linked-claude_3.json"]["at"] == nil || results["linked-claude_3.json"]["error"] != nil {
+		t.Fatalf("claude_3 result = %v", results["linked-claude_3.json"])
+	}
+	if results["linked-claude_6.json"]["error"] != "claude /usage: Not logged in" || results["linked-claude_6.json"]["at"] != nil {
+		t.Fatalf("claude_6 result = %v", results["linked-claude_6.json"])
+	}
+	rooms := map[string][]any{}
+	for _, a := range out["accounts"].([]any) {
+		m := a.(map[string]any)
+		rooms[m["id"].(string)], _ = m["rooms"].([]any)
+	}
+	if len(rooms["linked-claude_3.json"]) != 2 {
+		t.Fatalf("claude_3 rooms after the read = %v, want 5h and 7d", rooms["linked-claude_3.json"])
+	}
+	if len(rooms["linked-claude_6.json"]) != 1 {
+		t.Fatalf("claude_6 lost its reading on a failed read: %v", rooms["linked-claude_6.json"])
+	}
+
+	// A second press within two minutes answers with the same readings and reads nothing.
+	before := len(readDirs)
+	again := s.do(http.MethodPost, "/v8/management/buff/recheck", `{"ids": ["linked-claude_3.json"]}`, http.StatusOK)
+	if r := again["results"].([]any)[0].(map[string]any); r["cached"] != true || len(readDirs) != before {
+		t.Fatalf("second press = %v, reads %d -> %d", r, before, len(readDirs))
 	}
 }

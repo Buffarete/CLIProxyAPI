@@ -2,12 +2,14 @@ package cliproxy
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/buffcloud"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
@@ -25,6 +27,12 @@ func writePlan(t *testing.T, dir, tier string) {
 
 func TestPlanWatchRechecksAnAccountWhosePlanChanged(t *testing.T) {
 	authDir, claudeDir := t.TempDir(), t.TempDir()
+	reads := 0
+	planWatchReadUsage = func(context.Context, string, time.Time) (http.Header, error) {
+		reads++
+		return http.Header{"Anthropic-Ratelimit-Unified-7d-Utilization": {"0.2"}}, nil
+	}
+	t.Cleanup(func() { planWatchReadUsage = buffcloud.ReadClaudeUsage })
 	writePlan(t, claudeDir, "default_claude_max_5x")
 	manager := coreauth.NewManager(nil, nil, nil)
 	auth := &coreauth.Auth{ID: "linked-claude_7.json", Provider: "claude", Metadata: map[string]any{linked.MetadataKey: claudeDir},
@@ -54,5 +62,19 @@ func TestPlanWatchRechecksAnAccountWhosePlanChanged(t *testing.T) {
 	writePlan(t, claudeDir, "default_claude_max_5x")
 	if got := newPlanWatch(authDir).check(context.Background(), manager); len(got) != 1 {
 		t.Fatalf("after a restart check() = %v, want the change caught", got)
+	}
+	// A recheck leaves no reading, so a check reads the usage through Claude Code; then not again for 3 h.
+	if reads == 0 {
+		t.Fatal("no usage read after the recheck cleared the reading")
+	}
+	w2 := newPlanWatch(authDir)
+	w2.check(context.Background(), manager)
+	before := reads
+	w2.check(context.Background(), manager)
+	if reads != before {
+		t.Fatalf("usage reads went from %d to %d with a fresh reading", before, reads)
+	}
+	if read, _ := manager.GetByID(auth.ID); read.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"] != "0.2" {
+		t.Fatalf("reading after the usage read = %v", read.Quota.Signals)
 	}
 }
