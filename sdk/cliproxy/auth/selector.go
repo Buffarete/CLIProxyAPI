@@ -1115,7 +1115,32 @@ func (s *SessionAffinitySelector) Trees() *cliproxysession.InMemorySessionTreeSt
 // Note: The cache key includes provider, session ID, and model to handle cases where
 // a session uses multiple models (e.g., gemini-2.5-pro and gemini-3-flash-preview)
 // that may be supported by different auth credentials, and to avoid cross-provider conflicts.
+//
+// Buff Cloud fork: under the paced strategy, accounts near a limit are left out
+// while another account has room, so their sessions move before a 429, and
+// every pick is noted for the active-session counts (selector_paced.go).
 func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
+	paced := s.pacedSelector()
+	if paced == nil {
+		return s.pickBound(ctx, provider, model, opts, auths)
+	}
+	if opts.Metadata == nil {
+		opts.Metadata = make(map[string]any)
+	}
+	kept, dropped := dropNearLimit(auths, model, paced.now())
+	if len(dropped) > 0 {
+		selectorLogEntry(ctx).Debugf("room-routing: paced leaves out accounts near a limit | dropped=%s model=%s", strings.Join(dropped, ","), model)
+	}
+	auth, err := s.pickBound(ctx, provider, model, opts, kept)
+	if err == nil && auth != nil {
+		if sessionID, _ := opts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey].(string); sessionID != "" {
+			paced.NoteSession(sessionID, auth.ID)
+		}
+	}
+	return auth, err
+}
+
+func (s *SessionAffinitySelector) pickBound(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, auths []*Auth) (*Auth, error) {
 	entry := selectorLogEntry(ctx)
 	if opts.Metadata == nil {
 		opts.Metadata = make(map[string]any)

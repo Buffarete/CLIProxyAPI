@@ -36,6 +36,7 @@ var (
 var buffStrategies = map[string]string{
 	coreauth.RoomStrategyMostRoom:     coreauth.RoomStrategyMostRoom,
 	coreauth.RoomStrategySoonestReset: coreauth.RoomStrategySoonestReset,
+	coreauth.RoomStrategyPaced:        coreauth.RoomStrategyPaced,
 	"round-robin":                     "round-robin",
 	"roundrobin":                      "round-robin",
 	"rr":                              "round-robin",
@@ -97,6 +98,9 @@ type buffAccount struct {
 	// Held lists the windows at their reserve now. The router skips the account while any
 	// window that binds every request is held; a per-model one (7d_opus) holds only that model.
 	Held []buffReserveHold `json:"held"`
+	// ActiveSessions counts the sessions that sent a request on the account in
+	// the last ten minutes; null when the routing strategy does not count them.
+	ActiveSessions *int `json:"activeSessions"`
 }
 
 type buffReserveHold struct {
@@ -488,7 +492,7 @@ func (p *buffSettingsPatch) parse(body map[string]json.RawMessage) error {
 			}
 			normalized, ok := normalizeBuffStrategy(s)
 			if !ok {
-				return fmt.Errorf("unknown strategy %q; use most-room, soonest-reset, round-robin, weighted-round-robin or fill-first", s)
+				return fmt.Errorf("unknown strategy %q; use paced, most-room, soonest-reset, round-robin, weighted-round-robin or fill-first", s)
 			}
 			p.strategy = &normalized
 		case "pinned":
@@ -603,6 +607,7 @@ func (h *Handler) buffAccounts(ctx context.Context, now time.Time, withCodexUsag
 		return accounts
 	}
 	usageLog := buffcloud.DefaultUsageLog()
+	active := h.authManager.ActiveSessions()
 	for _, auth := range h.authManager.List() {
 		if !isAuthFileListable(auth) {
 			continue
@@ -646,6 +651,10 @@ func (h *Handler) buffAccounts(ctx context.Context, now time.Time, withCodexUsag
 		a.Held = []buffReserveHold{}
 		for _, hold := range coreauth.ReserveHoldsAnyModel(auth, now) {
 			a.Held = append(a.Held, buffReserveHold{Window: hold.Window, Used: hold.Used, Reserve: hold.Reserve, Until: epochMs(hold.Until)})
+		}
+		if active != nil {
+			n := active[auth.ID]
+			a.ActiveSessions = &n
 		}
 		if ws, ok := authWebsocketsValue(auth); ok {
 			a.Websockets = &ws
