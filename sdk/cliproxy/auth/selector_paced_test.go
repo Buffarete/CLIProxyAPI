@@ -224,3 +224,19 @@ func TestSetRoomStrategySwitchesToPaced(t *testing.T) {
 		t.Fatal("SetRoomStrategy(paced) did not switch in place")
 	}
 }
+
+func TestPacedSpendsTheLastOfAWeekButLeavesASpentOne(t *testing.T) {
+	f := newPacedFixture(t)
+	// ending has 15% of its week left and 6 h to its reset: no floor on the
+	// weekly window, so it keeps getting work and ends its week near 0%.
+	ending := f.account("ending", 0.1, 3, 0.85, 6)
+	other := f.account("other", 0.1, 3, 0.5, 150)
+	if got := f.session("end-1", "claude-opus-5-5", ending, other); got != "ending" {
+		t.Fatalf("new session went to %s, want ending (15%% of its week left, 6 h to go)", got)
+	}
+	// With 1% of its week left the account counts as spent: its session moves.
+	ending.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"] = "0.99"
+	if got := f.session("end-1", "claude-opus-5-5", ending, other); got != "other" {
+		t.Fatalf("with its week spent the session stayed on %s, want a move to other", got)
+	}
+}

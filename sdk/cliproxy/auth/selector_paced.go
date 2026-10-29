@@ -9,7 +9,8 @@ package auth
 // weekly reset. A new session goes to the account with the highest target rate
 // per active session, scaled down as its 5-hour room runs low. An account with
 // little 5-hour room gets no new session while another has more, and a bound
-// session leaves an account that is near any limit before it gets a 429.
+// session leaves an account near its 5-hour limit, or with its week spent,
+// before it gets a 429.
 
 import (
 	"context"
@@ -26,13 +27,18 @@ import (
 const RoomStrategyPaced = "paced"
 
 const (
-	// pacedNewSessionFloor is the room (5-hour or weekly) under which an account
-	// gets no new session while another account has at least this much.
+	// pacedNewSessionFloor is the 5-hour room under which an account gets no
+	// new session while another account has at least this much.
 	pacedNewSessionFloor = 0.20
-	// pacedMoveAt is the room under which a bound session moves to another
+	// pacedMoveAt is the 5-hour room under which a bound session moves to another
 	// account that is above pacedNewSessionFloor. The gap to the floor keeps a
 	// moved session from moving back.
 	pacedMoveAt = 0.10
+	// pacedWeekEmpty is the weekly room under which an account counts as spent.
+	// The weekly window has no floor of its own: the target rate already slows
+	// an account down as its week runs low, and a floor would leave each week
+	// with that much room unspent at its reset.
+	pacedWeekEmpty = 0.02
 	// pacedFullFiveHour is the 5-hour room above which the 5-hour window does
 	// not lower an account's score.
 	pacedFullFiveHour = 0.5
@@ -66,8 +72,14 @@ type Pace struct {
 	TargetRate float64
 }
 
-// Worst is the smaller of the two rooms.
-func (p Pace) Worst() float64 { return math.Min(p.FiveHour, p.Week) }
+// Gate is the room the floor and the move rules test: the 5-hour room, or 0
+// once the week is spent.
+func (p Pace) Gate() float64 {
+	if p.Week < pacedWeekEmpty {
+		return 0
+	}
+	return p.FiveHour
+}
 
 // PaceOf computes an account's pace for a request for model ("" counts only
 // the windows that bind every request). Per-model windows such as 7d_opus or
@@ -194,10 +206,9 @@ type pacedCandidate struct {
 	score  float64
 }
 
-// pickPacedLocked picks for a new session. Accounts with at least
-// pacedNewSessionFloor of room go first; among them the highest score wins.
-// When no account has that much, the one with the most room wins, so the
-// work waits on the limit that resets first. Requires s.mu.
+// pickPacedLocked picks for a new session. Accounts whose Gate is at least
+// pacedNewSessionFloor go first; among them the highest score wins. When no
+// account has that much, the one with the most room wins. Requires s.mu.
 func (s *RoomSelector) pickPacedLocked(ctx context.Context, model string, opts cliproxyexecutor.Options, available []*Auth, now time.Time) *Auth {
 	sessionID, _ := opts.Metadata[cliproxyexecutor.CanonicalSessionIDMetadataKey].(string)
 	active := s.activeLocked(sessionID, now)
@@ -220,7 +231,7 @@ func (s *RoomSelector) pickPacedLocked(ctx context.Context, model string, opts c
 }
 
 func (s *RoomSelector) pacedBetter(a, b pacedCandidate) bool {
-	aOpen, bOpen := a.pace.Worst() >= pacedNewSessionFloor, b.pace.Worst() >= pacedNewSessionFloor
+	aOpen, bOpen := a.pace.Gate() >= pacedNewSessionFloor, b.pace.Gate() >= pacedNewSessionFloor
 	if aOpen != bOpen {
 		return aOpen
 	}
@@ -228,8 +239,8 @@ func (s *RoomSelector) pacedBetter(a, b pacedCandidate) bool {
 		if a.score != b.score {
 			return a.score > b.score
 		}
-	} else if a.pace.Worst() != b.pace.Worst() {
-		return a.pace.Worst() > b.pace.Worst()
+	} else if a.pace.Gate() != b.pace.Gate() {
+		return a.pace.Gate() > b.pace.Gate()
 	}
 	if a.active != b.active {
 		return a.active < b.active
@@ -272,8 +283,8 @@ func (s *SessionAffinitySelector) pacedSelector() *RoomSelector {
 	return room
 }
 
-// dropNearLimit leaves out the accounts that are near a limit for model while
-// another usable account has room, so a session bound to one of them moves
+// dropNearLimit leaves out the accounts near their 5-hour limit, or with their
+// week spent, for model while another usable account has 5-hour room, so a session bound to one of them moves
 // now, before it gets a 429. Moving costs one prompt-cache rebuild; a 429
 // costs the session its turn. When no account has room, nothing is dropped.
 func dropNearLimit(auths []*Auth, model string, now time.Time) ([]*Auth, []string) {
@@ -282,7 +293,7 @@ func dropNearLimit(auths []*Auth, model string, now time.Time) ([]*Auth, []strin
 		if blocked, _, _ := isAuthBlockedForModel(auth, model, now); blocked {
 			continue
 		}
-		if PaceOf(auth, model, now).Worst() >= pacedNewSessionFloor {
+		if PaceOf(auth, model, now).Gate() >= pacedNewSessionFloor {
 			roomy = true
 			break
 		}
@@ -293,7 +304,7 @@ func dropNearLimit(auths []*Auth, model string, now time.Time) ([]*Auth, []strin
 	kept := make([]*Auth, 0, len(auths))
 	var dropped []string
 	for _, auth := range auths {
-		if auth != nil && PaceOf(auth, model, now).Worst() < pacedMoveAt {
+		if auth != nil && PaceOf(auth, model, now).Gate() < pacedMoveAt {
 			dropped = append(dropped, auth.ID)
 			continue
 		}
