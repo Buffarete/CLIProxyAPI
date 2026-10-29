@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
@@ -74,8 +75,9 @@ func TestClaudeExecutor_HonorsAnthropicRateLimitHeaders_Execute(t *testing.T) {
 	}
 
 	// Should be at least 7 days (reported reset) and at most 7 days + 35s (fuzz upper bound).
-	minExpected := 7*24*time.Hour - 5*time.Second
-	maxExpected := 7*24*time.Hour + 35*time.Second
+	// Buff Cloud fork: a 7-day reset is checked again after helps.ClaudeLongCooldownRecheck.
+	minExpected := helps.ClaudeLongCooldownRecheck - 5*time.Second
+	maxExpected := helps.ClaudeLongCooldownRecheck + 35*time.Second
 	if *retryAfter < minExpected || *retryAfter > maxExpected {
 		t.Fatalf("RetryAfter = %v, want between %v and %v", *retryAfter, minExpected, maxExpected)
 	}
@@ -183,8 +185,9 @@ func TestClaudeExecutor_RateLimit_BothRejectedUsesLongest(t *testing.T) {
 		t.Fatalf("expected non-nil RetryAfter, got nil")
 	}
 
-	minExpected := 7*24*time.Hour - 5*time.Second
-	maxExpected := 7*24*time.Hour + 35*time.Second
+	// Buff Cloud fork: a 7-day reset is checked again after helps.ClaudeLongCooldownRecheck.
+	minExpected := helps.ClaudeLongCooldownRecheck - 5*time.Second
+	maxExpected := helps.ClaudeLongCooldownRecheck + 35*time.Second
 	if *retryAfter < minExpected || *retryAfter > maxExpected {
 		t.Fatalf("RetryAfter = %v, want between %v and %v", *retryAfter, minExpected, maxExpected)
 	}
@@ -241,8 +244,9 @@ func TestClaudeExecutor_RateLimit_CountTokensHonorsRateLimitReset(t *testing.T) 
 		t.Fatalf("expected CountTokens rate limit error to be credential-scoped, got %v", err)
 	}
 
-	minExpected := 7*24*time.Hour - 5*time.Second
-	maxExpected := 7*24*time.Hour + 35*time.Second
+	// Buff Cloud fork: a 7-day reset is checked again after helps.ClaudeLongCooldownRecheck.
+	minExpected := helps.ClaudeLongCooldownRecheck - 5*time.Second
+	maxExpected := helps.ClaudeLongCooldownRecheck + 35*time.Second
 	if *rap.RetryAfter() < minExpected || *rap.RetryAfter() > maxExpected {
 		t.Fatalf("RetryAfter = %v, want between %v and %v", *rap.RetryAfter(), minExpected, maxExpected)
 	}
