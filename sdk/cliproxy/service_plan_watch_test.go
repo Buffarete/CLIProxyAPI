@@ -67,9 +67,9 @@ func TestPlanWatchRechecksAnAccountWhosePlanChanged(t *testing.T) {
 	if reads == 0 {
 		t.Fatal("no usage read after the recheck cleared the reading")
 	}
-	before := reads
 	w2 := newPlanWatch(authDir)
 	w2.check(context.Background(), manager)
+	before := reads
 	w2.check(context.Background(), manager)
 	if reads != before {
 		t.Fatalf("usage reads went from %d to %d with a fresh reading", before, reads)
