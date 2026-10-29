@@ -78,8 +78,9 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected non-nil RetryAfter")
 		}
-		if *got < 7*24*time.Hour-5*time.Second || *got > 7*24*time.Hour+5*time.Second {
-			t.Fatalf("expected ~7d, got %v", *got)
+		// Buff Cloud fork: a 7d deadline is checked again after ClaudeLongCooldownRecheck.
+		if *got != ClaudeLongCooldownRecheck {
+			t.Fatalf("expected %v, got %v", ClaudeLongCooldownRecheck, *got)
 		}
 	})
 
@@ -94,8 +95,9 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected non-nil RetryAfter")
 		}
-		if *got < 7*24*time.Hour-5*time.Second || *got > 7*24*time.Hour+5*time.Second {
-			t.Fatalf("expected ~7d, got %v", *got)
+		// Buff Cloud fork: a 7d deadline is checked again after ClaudeLongCooldownRecheck.
+		if *got != ClaudeLongCooldownRecheck {
+			t.Fatalf("expected %v, got %v", ClaudeLongCooldownRecheck, *got)
 		}
 	})
 
@@ -190,8 +192,9 @@ func TestParseClaudeRateLimitReset_AllCases(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected non-nil RetryAfter")
 		}
-		if *got < 7*24*time.Hour-5*time.Second || *got > 7*24*time.Hour+5*time.Second {
-			t.Fatalf("expected ~7d, got %v", *got)
+		// Buff Cloud fork: a 7d deadline is checked again after ClaudeLongCooldownRecheck.
+		if *got != ClaudeLongCooldownRecheck {
+			t.Fatalf("expected %v, got %v", ClaudeLongCooldownRecheck, *got)
 		}
 	})
 

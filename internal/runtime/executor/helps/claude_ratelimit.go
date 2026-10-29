@@ -223,6 +223,13 @@ func singleHeaderValueCaseInsensitive(headers http.Header, target string) (strin
 // unified rate-limit and standard Retry-After reset information, returning the conservative cooldown
 // duration including a bounded non-negative random grace period.
 // If no valid future reset information is present, it returns nil.
+// ClaudeLongCooldownAfter is the cooldown above which the account is checked
+// again after ClaudeLongCooldownRecheck instead (Buff Cloud fork).
+const (
+	ClaudeLongCooldownAfter   = 5*time.Hour + 10*time.Minute
+	ClaudeLongCooldownRecheck = 3 * time.Hour
+)
+
 func ParseClaudeRateLimitReset(headers http.Header, now time.Time) *time.Duration {
 	return parseClaudeRateLimitResetWithFuzz(headers, now, defaultClaudeRateLimitFuzzMinSeconds, defaultClaudeRateLimitFuzzMaxSeconds)
 }
@@ -343,6 +350,12 @@ func parseClaudeRateLimitResetWithFuzz(headers http.Header, now time.Time, minFu
 	}
 
 	baseDuration := latestDeadline.Sub(now)
+	// Buff Cloud fork: a deadline past any 5-hour window (a rejected 7d window, or a
+	// Retry-After of days) is checked again after ClaudeLongCooldownRecheck, not
+	// trusted for days: a plan upgrade or a reset Anthropic grants lifts it early.
+	if baseDuration > ClaudeLongCooldownAfter {
+		baseDuration = ClaudeLongCooldownRecheck
+	}
 	fuzz := randomClaudeFuzzDuration(minFuzzSec, maxFuzzSec)
 	effectiveDuration := baseDuration + fuzz
 

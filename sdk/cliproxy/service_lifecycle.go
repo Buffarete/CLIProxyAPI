@@ -105,6 +105,9 @@ func (s *Service) Run(ctx context.Context) error {
 			includeBaseline: true,
 			auths:           s.coreManager.List(),
 		})
+		if authDir, errResolve := resolveCooldownStateAuthDir(cfg); errResolve == nil {
+			s.startPlanWatch(ctx, authDir)
+		}
 		interval := 15 * time.Minute
 		s.coreManager.StartAutoRefresh(ctx, interval)
 		log.Infof("core auth auto-refresh started (interval=%s)", interval)

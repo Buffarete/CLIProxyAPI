@@ -63,6 +63,13 @@ func NewCodexUsageProbe() *CodexUsageProbe {
 	return &CodexUsageProbe{URL: CodexUsageURL, entries: map[string]*codexUsageEntry{}}
 }
 
+// Forget drops the account's cached answer, so the next Get fetches.
+func (p *CodexUsageProbe) Forget(accountID string) {
+	p.mu.Lock()
+	delete(p.entries, accountID)
+	p.mu.Unlock()
+}
+
 // Get returns the account's usage, fetching it when the cached answer is older
 // than a minute. credential is called only when a fetch is due.
 func (p *CodexUsageProbe) Get(ctx context.Context, client *http.Client, accountID string, credential func() (CodexCredential, error), now time.Time) CodexUsage {

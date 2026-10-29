@@ -138,6 +138,8 @@ type RoomSelector struct {
 	// sessions holds each session's last account, for the paced strategy's
 	// active-session counts (selector_paced.go).
 	sessions map[string]pacedSession
+	// rechecked is when each spent account last got a recheck session.
+	rechecked map[string]time.Time
 }
 
 // NewRoomSelector returns a selector for RoomStrategyMostRoom, RoomStrategySoonestReset
