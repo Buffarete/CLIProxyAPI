@@ -51,7 +51,7 @@ func TestParseClaudeRateLimitResetForError_Issue6720(t *testing.T) {
 		}, wantMin: 31 * time.Second, wantMax: 60 * time.Second},
 		{name: "maximum usable retry honored", body: claudePerMinuteBodyRequests, mutate: func(h http.Header) {
 			h.Set("Retry-After", strconv.FormatInt(int64(maxClaudeRateLimitWindow/time.Second), 10))
-		}, wantMin: maxClaudeRateLimitWindow + time.Second, wantMax: maxClaudeRateLimitWindow + 30*time.Second},
+		}, wantMin: ClaudeLongCooldownRecheck + time.Second, wantMax: ClaudeLongCooldownRecheck + 30*time.Second}, // Buff Cloud fork: rechecked after 3 h
 		{name: "nonempty alias status blocks", body: claudePerMinuteBodyRequests, mutate: func(h http.Header) {
 			h["Anthropic-Ratelimit-Unified-Status"] = []string{""}
 			h["anthropic-ratelimit-unified-status"] = []string{"", "rejected"}

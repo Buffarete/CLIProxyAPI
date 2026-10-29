@@ -101,6 +101,9 @@ type buffAccount struct {
 	// ActiveSessions counts the sessions that sent a request on the account in
 	// the last ten minutes; null when the routing strategy does not count them.
 	ActiveSessions *int `json:"activeSessions"`
+	// Tier is the Claude rate-limit tier Claude Code last fetched for a linked
+	// dir, such as default_claude_max_20x; null when unknown.
+	Tier *string `json:"tier"`
 }
 
 type buffReserveHold struct {
@@ -651,6 +654,11 @@ func (h *Handler) buffAccounts(ctx context.Context, now time.Time, withCodexUsag
 		a.Held = []buffReserveHold{}
 		for _, hold := range coreauth.ReserveHoldsAnyModel(auth, now) {
 			a.Held = append(a.Held, buffReserveHold{Window: hold.Window, Used: hold.Used, Reserve: hold.Reserve, Until: epochMs(hold.Until)})
+		}
+		if dir := linked.Dir(auth.Metadata); dir != "" && strings.EqualFold(auth.Provider, "claude") {
+			if tier := linked.ClaudeTier(dir); tier != "" {
+				a.Tier = &tier
+			}
 		}
 		if active != nil {
 			n := active[auth.ID]

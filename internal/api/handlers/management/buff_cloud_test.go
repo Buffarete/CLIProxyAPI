@@ -78,6 +78,7 @@ func newBuffTestServerWithStore(t *testing.T, store coreauth.Store, auths ...*co
 	v8.GET("/buff/accounts", h.BuffAccounts)
 	v8.PATCH("/buff/settings", h.PatchBuffSettings)
 	v8.PATCH("/buff/reserve", h.PatchBuffReserve)
+	v8.POST("/buff/recheck", h.PostBuffRecheck)
 	v8.POST("/credentials/refresh", h.RefreshAuthFiles)
 	return &buffTestServer{t: t, path: path, router: router, manager: manager}
 }
@@ -243,5 +244,52 @@ func TestPatchBuffReserveSetsListsAndClears(t *testing.T) {
 	accounts := s.do(http.MethodGet, "/v8/management/buff/accounts", "", http.StatusOK)
 	if account := accounts["accounts"].([]any)[0].(map[string]any); account["reserve"] != nil {
 		t.Fatalf("accounts after clearing = %v", account)
+	}
+}
+
+func TestPostBuffRecheckClearsCooldownAndAnswersFreshAccounts(t *testing.T) {
+	later := time.Now().Add(60 * time.Hour)
+	dir := t.TempDir()
+	path := func(id string) map[string]string {
+		p := filepath.Join(dir, id)
+		if err := os.WriteFile(p, []byte(`{"type":"claude"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return map[string]string{"path": p}
+	}
+	spent := &coreauth.Auth{ID: "claude-7", FileName: "claude-7", Attributes: path("claude-7"), Provider: "claude", Label: "Claude 7",
+		Unavailable: true, NextRetryAfter: later, Status: coreauth.StatusError,
+		Quota: coreauth.QuotaState{Exceeded: true, NextRecoverAt: later, ObservedAt: time.Now(),
+			Signals: map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "1", "Anthropic-Ratelimit-Unified-7d-Reset": "4102444800"}}}
+	other := &coreauth.Auth{ID: "claude-3", FileName: "claude-3", Attributes: path("claude-3"), Provider: "claude", Label: "Claude 3"}
+	s := newBuffTestServer(t, spent, other)
+
+	s.do(http.MethodPost, "/v8/management/buff/recheck", `{"ids": ["nope"]}`, http.StatusNotFound)
+	s.do(http.MethodPost, "/v8/management/buff/recheck", `{"ids": 3}`, http.StatusBadRequest)
+	out := s.do(http.MethodPost, "/v8/management/buff/recheck", `{"ids": ["claude-7"]}`, http.StatusOK)
+	if ids, _ := out["rechecked"].([]any); len(ids) != 1 || ids[0] != "claude-7" {
+		t.Fatalf("rechecked = %v", out["rechecked"])
+	}
+	if at, _ := out["recheckedAt"].(float64); at <= 0 {
+		t.Fatalf("recheckedAt = %v", out["recheckedAt"])
+	}
+	accounts, _ := out["accounts"].([]any)
+	var found map[string]any
+	for _, a := range accounts {
+		if m := a.(map[string]any); m["id"] == "claude-7" {
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatalf("claude-7 missing from %v", accounts)
+	}
+	if rooms, _ := found["rooms"].([]any); len(rooms) != 0 {
+		t.Fatalf("rooms after recheck = %v, want none (not heard from)", rooms)
+	}
+	if found["cooldownUntil"] != nil {
+		t.Fatalf("cooldownUntil after recheck = %v", found["cooldownUntil"])
+	}
+	if all := s.do(http.MethodPost, "/v8/management/buff/recheck", "", http.StatusOK); len(all["rechecked"].([]any)) != 2 {
+		t.Fatalf("an empty body rechecked %v, want every account", all["rechecked"])
 	}
 }

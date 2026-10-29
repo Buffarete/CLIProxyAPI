@@ -39,6 +39,10 @@ const (
 	// an account down as its week runs low, and a floor would leave each week
 	// with that much room unspent at its reset.
 	pacedWeekEmpty = 0.02
+	// pacedRecheckAfter is how old a spent-week reading gets before one new
+	// session goes to the account to read fresh headers. A plan upgrade or an
+	// early reset only shows in a response, and a spent account gets none.
+	pacedRecheckAfter = 3 * time.Hour
 	// pacedFullFiveHour is the 5-hour room above which the 5-hour window does
 	// not lower an account's score.
 	pacedFullFiveHour = 0.5
@@ -206,7 +210,16 @@ type pacedCandidate struct {
 	score  float64
 }
 
-// pickPacedLocked picks for a new session. Accounts whose Gate is at least
+// recheckDue reports whether the account's week reads as spent from a reading
+// older than pacedRecheckAfter.
+func recheckDue(auth *Auth, p Pace, now time.Time) bool {
+	return p.Week < pacedWeekEmpty && !auth.Quota.ObservedAt.IsZero() && now.Sub(auth.Quota.ObservedAt) >= pacedRecheckAfter
+}
+
+// pickPacedLocked picks for a new session. An account whose spent-week reading
+// is due a recheck takes one new session first, at most once per
+// pacedRecheckAfter; if it is still spent, its 429 moves the request on at once.
+// Otherwise accounts whose Gate is at least
 // pacedNewSessionFloor go first; among them the highest score wins. When no
 // account has that much, the one with the most room wins. Requires s.mu.
 func (s *RoomSelector) pickPacedLocked(ctx context.Context, model string, opts cliproxyexecutor.Options, available []*Auth, now time.Time) *Auth {
@@ -222,6 +235,17 @@ func (s *RoomSelector) pickPacedLocked(ctx context.Context, model string, opts c
 	for i := 1; i < len(candidates); i++ {
 		if s.pacedBetter(candidates[i], candidates[best]) {
 			best = i
+		}
+	}
+	for _, c := range candidates {
+		if recheckDue(c.auth, c.pace, now) && now.Sub(s.rechecked[c.auth.ID]) >= pacedRecheckAfter {
+			if s.rechecked == nil {
+				s.rechecked = make(map[string]time.Time)
+			}
+			s.rechecked[c.auth.ID] = now
+			s.noteSessionLocked(sessionID, c.auth.ID, now)
+			selectorLogEntry(ctx).Infof("room-routing: paced rechecks %s (%s): its spent-week reading is %s old", c.auth.ID, c.auth.Label, now.Sub(c.auth.Quota.ObservedAt).Round(time.Minute))
+			return c.auth
 		}
 	}
 	chosen := candidates[best]
@@ -304,7 +328,7 @@ func dropNearLimit(auths []*Auth, model string, now time.Time) ([]*Auth, []strin
 	kept := make([]*Auth, 0, len(auths))
 	var dropped []string
 	for _, auth := range auths {
-		if auth != nil && PaceOf(auth, model, now).Gate() < pacedMoveAt {
+		if pace := PaceOf(auth, model, now); auth != nil && pace.Gate() < pacedMoveAt && !recheckDue(auth, pace, now) {
 			dropped = append(dropped, auth.ID)
 			continue
 		}

@@ -18,6 +18,7 @@ The examples are real responses from box on 2026-10-19, with email addresses rep
 | GET | `/buff/summary?now=<ms>&dayStart=<ms>` | The AI page summary, in one call. |
 | PATCH | `/buff/settings` | Strategy, pin, pin fallback, proxy on or off. |
 | PATCH | `/buff/reserve` | Set or clear one account's usage reserve. |
+| POST | `/buff/recheck` | Clear accounts' cooldowns and quota readings so their next request reads fresh headers. |
 | PATCH | `/credentials/status` | Enable or disable one credential (upstream endpoint). |
 | GET | `/healthz` (not under `/v8/management`, no key) | Liveness for the status dot. |
 
@@ -146,6 +147,7 @@ Fields of each account:
 - `activeSessions`: the sessions that sent a request on the account in the last ten minutes, or `null` when the
   routing strategy does not count them (only the room strategies do). The paced strategy divides an account's
   score by one plus this count (`sdk/cliproxy/auth/selector_paced.go`).
+- `tier`: for a linked Claude dir, the rate-limit tier Claude Code last fetched (`default_claude_max_20x`), or `null`.
 - `lastStatus`, `lastUsedAt`: from the account's last row in the usage log (last 8 days).
 - `tokenExpiresAt`: for a linked credential, read from the dir's own credentials file.
 - `status`: upstream's `active`, `error` or `disabled`. `statusMessage` appears with errors.
@@ -421,6 +423,27 @@ How the router applies it (`sdk/cliproxy/auth/reserve.go`):
   names each reserve, for example `Every account for claude-opus-5 is at the reserve set in Buff Cloud:
   Claude 4 keeps 20% of 7d free (81% used, resets 2026-10-29 09:00 UTC). Lower the reserve on Buff Cloud's
   Usage page to use it now.` `Retry-After` is the first reset.
+
+## POST /buff/recheck
+
+Behind Buff Cloud's Refresh and Recheck buttons. The body names the accounts, `{"ids": ["linked-claude_7.json"]}`;
+no body or an empty list means every account. For each one the router clears the cooldown and the saved quota
+reading (`quota-signals.state` too), so the account counts as not heard from and its next real request reads
+fresh rate-limit headers. A Codex account's `wham/usage` is fetched again at once. The answer is the
+`/buff/accounts` list read after the recheck, with `rechecked` (the ids) and `recheckedAt` (epoch ms). An
+unknown id is a 404 `no account <id>`. Nothing is sent to a provider for a Claude account: its new numbers come
+with its next request.
+
+The same recheck runs on its own:
+
+- **Plan watch.** Every two minutes the proxy reads each linked Claude dir's plan fields (`organizationType`,
+  `organizationRateLimitTier` in `.claude.json`, `subscriptionType` and `rateLimitTier` beside the token). When
+  they change, as after an upgrade once Claude Code has run on the dir, the account is rechecked. The last plans
+  seen are in `auths/plans.state`, so a change made while the proxy was down is caught at start.
+- **Long cooldowns.** A Claude 429 whose reset lies past a 5-hour window (a rejected 7d window, or a Retry-After
+  of days) cools the account for 3 h, not until that reset. Under `paced`, an account whose spent-week reading
+  is over 3 h old takes one new session to read fresh headers; if it is still spent, its 429 moves the request
+  on at once.
 
 ## PATCH /buff/settings
 

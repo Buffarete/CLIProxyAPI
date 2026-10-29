@@ -90,6 +90,22 @@ func (s *QuotaSignalStore) record(authID string, quota QuotaState) {
 	}
 }
 
+// forget drops a credential's saved observation and saves at once.
+func (s *QuotaSignalStore) forget(authID string) {
+	if s == nil || authID == "" {
+		return
+	}
+	s.mu.Lock()
+	_, had := s.records[authID]
+	delete(s.records, authID)
+	s.mu.Unlock()
+	if had {
+		if errSave := s.Save(); errSave != nil {
+			log.Warnf("quota signals: save %s: %v", s.path, errSave)
+		}
+	}
+}
+
 // Save writes every observation younger than quotaSignalMaxAge, atomically and mode 600.
 func (s *QuotaSignalStore) Save() error {
 	if s == nil {

@@ -120,3 +120,33 @@ func setString(metadata map[string]any, key, value string) {
 		metadata[key] = value
 	}
 }
+
+// ClaudePlan names a Claude Code config dir's plan, for spotting a change:
+// the organization type and rate-limit tier from .claude.json and the
+// subscription type and tier beside the token in .credentials.json. It reads no
+// token. Claude Code rewrites both files when it refreshes the profile or the
+// token, so an upgrade shows here after the account's next Claude Code run.
+func ClaudePlan(dir string) string {
+	account := claudeAccount(dir)
+	raw, _ := os.ReadFile(claudeCredentialsPath(dir))
+	parts := []string{
+		account.Get("organizationType").String(),
+		account.Get("organizationRateLimitTier").String(),
+		gjson.GetBytes(raw, "claudeAiOauth.subscriptionType").String(),
+		gjson.GetBytes(raw, "claudeAiOauth.rateLimitTier").String(),
+	}
+	if strings.Join(parts, "") == "" {
+		return ""
+	}
+	return strings.Join(parts, "/")
+}
+
+// ClaudeTier is the rate-limit tier Claude Code last fetched for the dir's
+// account, such as default_claude_max_20x; "" when unknown.
+func ClaudeTier(dir string) string {
+	if tier := claudeAccount(dir).Get("organizationRateLimitTier").String(); tier != "" {
+		return tier
+	}
+	raw, _ := os.ReadFile(claudeCredentialsPath(dir))
+	return gjson.GetBytes(raw, "claudeAiOauth.rateLimitTier").String()
+}
