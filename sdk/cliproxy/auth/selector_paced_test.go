@@ -241,24 +241,16 @@ func TestPacedSpendsTheLastOfAWeekButLeavesASpentOne(t *testing.T) {
 	}
 }
 
-func TestPacedRechecksAStaleSpentWeekWithOneSession(t *testing.T) {
+func TestPacedSendsNoSessionToAStaleSpentWeek(t *testing.T) {
 	f := newPacedFixture(t)
+	// Claude 1, 2 and 4 after a restart: week full, reading hours old. The plan
+	// watch reads them through Claude Code's /usage; no real session probes them.
 	spent := f.account("spent", 0.0, 3, 1.0, 60)
 	spent.Quota.ObservedAt = f.now.Add(-4 * time.Hour)
 	roomy := f.account("roomy", 0.1, 3, 0.4, 100)
-	if kept, _ := dropNearLimit([]*Auth{spent, roomy}, "claude-opus-5-5", f.now); len(kept) != 2 {
-		t.Fatalf("dropNearLimit dropped an account due a recheck: kept %d", len(kept))
-	}
-	if got := f.session("probe-1", "claude-opus-5-5", spent, roomy); got != "spent" {
-		t.Fatalf("first new session went to %s, want spent: its reading is 4 h old", got)
-	}
-	for i := 2; i < 5; i++ {
-		if got := f.session(fmt.Sprintf("probe-%d", i), "claude-opus-5-5", spent, roomy); got != "roomy" {
-			t.Fatalf("session %d went to %s; one recheck per 3 h is enough", i, got)
+	for i := 0; i < 4; i++ {
+		if got := f.session(fmt.Sprintf("stale-%d", i), "claude-opus-5-5", spent, roomy); got != "roomy" {
+			t.Fatalf("session %d went to %s, want roomy", i, got)
 		}
-	}
-	fresh := f.account("fresh-spent", 0.0, 3, 1.0, 60)
-	if got := f.session("probe-fresh", "claude-opus-5-5", fresh, roomy); got != "roomy" {
-		t.Fatalf("a fresh spent reading got a session (%s)", got)
 	}
 }

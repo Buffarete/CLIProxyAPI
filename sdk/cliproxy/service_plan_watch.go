@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/linked"
@@ -98,6 +99,10 @@ func (s *Service) startPlanWatch(ctx context.Context, authDir string) {
 	}
 	w := newPlanWatch(authDir)
 	go func() {
+		// A restart starts from the saved readings, which can be hours old: read
+		// every Claude account through Claude Code once, so routing starts on
+		// current numbers instead of probing spent accounts with real requests.
+		w.readAll(ctx, s.coreManager)
 		ticker := time.NewTicker(planWatchInterval)
 		defer ticker.Stop()
 		for {
@@ -116,10 +121,42 @@ func (s *Service) startPlanWatch(ctx context.Context, authDir string) {
 // so an idle or spent account still shows and routes on current numbers.
 func (w *planWatch) readStale(ctx context.Context, manager *coreauth.Manager, auth *coreauth.Auth, dir string) {
 	now := time.Now()
-	if now.Sub(auth.Quota.ObservedAt) < planWatchUsageEvery || now.Sub(w.read[auth.ID]) < planWatchUsageEvery || planWatchReadUsage == nil {
+	if now.Sub(auth.Quota.ObservedAt) < planWatchUsageEvery || now.Sub(w.read[auth.ID]) < planWatchUsageEvery {
 		return
 	}
 	w.read[auth.ID] = now
+	w.readUsage(ctx, manager, auth, dir, now)
+}
+
+// readAll reads every linked Claude account's usage now, at once.
+func (w *planWatch) readAll(ctx context.Context, manager *coreauth.Manager) {
+	now := time.Now()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	for _, auth := range manager.List() {
+		if auth == nil || !strings.EqualFold(auth.Provider, "claude") || auth.Disabled {
+			continue
+		}
+		dir := linked.Dir(auth.Metadata)
+		if dir == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(auth *coreauth.Auth, dir string) {
+			defer wg.Done()
+			mu.Lock()
+			w.read[auth.ID] = now
+			mu.Unlock()
+			w.readUsage(ctx, manager, auth, dir, now)
+		}(auth, dir)
+	}
+	wg.Wait()
+}
+
+func (w *planWatch) readUsage(ctx context.Context, manager *coreauth.Manager, auth *coreauth.Auth, dir string, now time.Time) {
+	if planWatchReadUsage == nil {
+		return
+	}
 	headers, err := planWatchReadUsage(ctx, dir, now)
 	if err != nil {
 		log.Warnf("plan watch: read usage of %s: %v", auth.ID, err)

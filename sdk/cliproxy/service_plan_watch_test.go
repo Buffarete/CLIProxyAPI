@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,5 +77,35 @@ func TestPlanWatchRechecksAnAccountWhosePlanChanged(t *testing.T) {
 	}
 	if read, _ := manager.GetByID(auth.ID); read.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"] != "0.2" {
 		t.Fatalf("reading after the usage read = %v", read.Quota.Signals)
+	}
+}
+
+func TestPlanWatchReadsEveryClaudeAccountAtStart(t *testing.T) {
+	var mu sync.Mutex
+	dirs := map[string]bool{}
+	planWatchReadUsage = func(_ context.Context, dir string, _ time.Time) (http.Header, error) {
+		mu.Lock()
+		dirs[dir] = true
+		mu.Unlock()
+		return http.Header{"Anthropic-Ratelimit-Unified-7d-Utilization": {"1"}, "Anthropic-Ratelimit-Unified-5h-Utilization": {"0"}}, nil
+	}
+	t.Cleanup(func() { planWatchReadUsage = buffcloud.ReadClaudeUsage })
+	manager := coreauth.NewManager(nil, nil, nil)
+	for _, id := range []string{"linked-claude.json", "linked-claude_2.json", "linked-claude_4.json"} {
+		// A saved reading from before the restart, hours old and saying the week has room.
+		auth := &coreauth.Auth{ID: id, Provider: "claude", Metadata: map[string]any{linked.MetadataKey: "/home/will/." + id},
+			Quota: coreauth.QuotaState{ObservedAt: time.Now().Add(-5 * time.Hour), Signals: map[string]string{"Anthropic-Ratelimit-Unified-7d-Utilization": "0.4"}}}
+		if _, err := manager.Register(context.Background(), auth); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newPlanWatch(t.TempDir()).readAll(context.Background(), manager)
+	if len(dirs) != 3 {
+		t.Fatalf("read %d accounts at start, want 3: %v", len(dirs), dirs)
+	}
+	for _, auth := range manager.List() {
+		if auth.Quota.Signals["Anthropic-Ratelimit-Unified-7d-Utilization"] != "1" {
+			t.Fatalf("%s kept its old reading after the start read: %v", auth.ID, auth.Quota.Signals)
+		}
 	}
 }

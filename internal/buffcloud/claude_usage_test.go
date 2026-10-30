@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 // Recorded `claude -p /usage` answers (Claude Code 2.1.312) from three accounts on 2026-10-29.
@@ -69,3 +71,11 @@ func TestCodexUsageHeadersFromWham(t *testing.T) {
 }
 
 func epochOf(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
+
+func TestAStatusZeroRowKeepsTheNetworkError(t *testing.T) {
+	row := RowFromRecord(usage.Record{AuthID: "linked-claude_7.json", Provider: "claude", Failed: true,
+		Fail: usage.Failure{StatusCode: 0, Body: `Post "https://api.anthropic.com/v1/messages?beta=true": claude tls: dial upstream: dial tcp: lookup api.anthropic.com on 127.0.0.53:53: server misbehaving`}})
+	if row.Status != 0 || !strings.Contains(row.Error, "server misbehaving") {
+		t.Fatalf("row = status %d error %q", row.Status, row.Error)
+	}
+}
