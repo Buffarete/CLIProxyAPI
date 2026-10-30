@@ -48,7 +48,8 @@ type Row struct {
 	SessionKey *string `json:"sessionKey"`
 	// TraceID is the inbound HTTP request's id, which messages.jsonl rows carry too.
 	TraceID string `json:"traceId,omitempty"`
-	// Error is the start of the upstream error body, for status 400 and above.
+	// Error is the start of the upstream error body, for status 400 and above,
+	// or the transport error for status 0 (no HTTP answer: DNS, dial, TLS).
 	Error string `json:"error,omitempty"`
 	// TTFTMs is the time to the first token.
 	TTFTMs int64 `json:"ttftMs,omitempty"`
@@ -116,7 +117,7 @@ func RowFromRecord(record usage.Record) Row {
 	}
 	if record.Failed {
 		row.Status = record.Fail.StatusCode
-		if row.Status >= 400 {
+		if row.Status >= 400 || row.Status == 0 {
 			row.Error = ErrorText(record.Fail.Body)
 		}
 	}
