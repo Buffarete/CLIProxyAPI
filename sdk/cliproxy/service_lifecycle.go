@@ -145,10 +145,14 @@ func (s *Service) Run(ctx context.Context) error {
 	// handlers no longer depend on legacy clients; pass nil slice initially
 	s.server = api.NewServer(cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
 	s.syncPluginRuntimeConfig(ctx)
-	if homeEnabled {
-		s.configRuntimeMu.Lock()
-		s.syncPluginModelRuntime(ctx)
-		s.configRuntimeMu.Unlock()
+	// Publish the models of every loaded auth before the server listens, so the
+	// first request never sees a valid model as unknown (400 model_not_found).
+	registrationStart := time.Now()
+	s.configRuntimeMu.Lock()
+	s.syncPluginModelRuntime(ctx)
+	s.configRuntimeMu.Unlock()
+	if s.coreManager != nil {
+		log.Infof("registered models for %d auth(s) before serving in %s", len(s.coreManager.List()), time.Since(registrationStart).Round(time.Millisecond))
 	}
 
 	if s.authManager == nil {
