@@ -54,7 +54,7 @@ func TestManagerFastLocalErrorDoesNotRefreshRetryOrCoolCredential(t *testing.T) 
 				}
 			},
 			run: func(manager *Manager, model string) error {
-				_, errExecute := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+				_, errExecute := manager.Execute(withUA(claudeCodeUA), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
 				return errExecute
 			},
 		},
@@ -72,7 +72,7 @@ func TestManagerFastLocalErrorDoesNotRefreshRetryOrCoolCredential(t *testing.T) 
 				}
 			},
 			run: func(manager *Manager, model string) error {
-				stream, errStream := manager.ExecuteStream(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{Stream: true})
+				stream, errStream := manager.ExecuteStream(withUA(claudeCodeUA), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{Stream: true})
 				if errStream != nil {
 					return errStream
 				}
@@ -134,7 +134,7 @@ func TestManagerFastDirectErrorDoesNotRefreshRetryOrCoolCredential(t *testing.T)
 				}
 			},
 			run: func(manager *Manager, model string) error {
-				_, errExecute := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+				_, errExecute := manager.Execute(withUA(claudeCodeUA), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
 				return errExecute
 			},
 		},
@@ -152,7 +152,7 @@ func TestManagerFastDirectErrorDoesNotRefreshRetryOrCoolCredential(t *testing.T)
 				}
 			},
 			run: func(manager *Manager, model string) error {
-				stream, errStream := manager.ExecuteStream(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{Stream: true})
+				stream, errStream := manager.ExecuteStream(withUA(claudeCodeUA), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{Stream: true})
 				if errStream != nil {
 					return errStream
 				}

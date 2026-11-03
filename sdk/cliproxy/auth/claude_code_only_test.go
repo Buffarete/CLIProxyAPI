@@ -79,3 +79,7 @@ func TestExecuteRefusesClaudeSubscriptionToOtherClients(t *testing.T) {
 		t.Fatalf("ExecuteStream: want %s, got %v", ErrorCodeClaudeCodeOnly, err)
 	}
 }
+
+// claudeCodeUA is the User-Agent Claude Code sends; tests of Claude subscription behavior use it so
+// the claude_code_only gate lets their requests through.
+const claudeCodeUA = "claude-cli/2.3.1 (external, cli)"
