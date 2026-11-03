@@ -152,7 +152,7 @@ func TestManagerClaudePrepareCancellationStopsWithoutCooldown(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(withUA(claudeCodeUA))
 			executor := &claudeCancellationTestExecutor{}
 			executor.prepareFn = func(ctx context.Context, auth *Auth) (*Auth, error) {
 				cancel()
@@ -221,7 +221,7 @@ func TestManagerClaudeRefreshCancellationStopsWithoutCooldown(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(withUA(claudeCodeUA))
 			executor := &claudeCancellationTestExecutor{}
 			tt.configure(executor)
 			executor.refreshFn = func(ctx context.Context, _ *Auth) (*Auth, error) {
@@ -255,7 +255,7 @@ func TestManagerClaudeStreamTailCancellationIsAvailabilityNeutral(t *testing.T) 
 	}
 	hook := &resultCaptureHook{}
 	manager, auth, model := newClaudeCancellationTestManager(t, executor, hook)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(withUA(claudeCodeUA))
 
 	stream, errStream := manager.ExecuteStream(ctx, []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{Stream: true})
 	if errStream != nil {
@@ -288,7 +288,7 @@ func TestManagerClaudeUpstreamFailureStillCoolsCredential(t *testing.T) {
 	}
 	manager, auth, model := newClaudeCancellationTestManager(t, executor, nil)
 
-	_, errExecute := manager.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	_, errExecute := manager.Execute(withUA(claudeCodeUA), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
 	if statusCodeFromError(errExecute) != http.StatusInternalServerError {
 		t.Fatalf("Execute() error = %v, want HTTP 500", errExecute)
 	}
@@ -303,7 +303,7 @@ func TestManagerClaudeUpstreamFailureStillCoolsCredential(t *testing.T) {
 }
 
 func TestClaudeRequestCancellationDoesNotChangeOtherProviders(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(withUA(claudeCodeUA))
 	cancel()
 	tests := []*Auth{
 		{Provider: "codex", Attributes: map[string]string{"auth_kind": "oauth"}},
