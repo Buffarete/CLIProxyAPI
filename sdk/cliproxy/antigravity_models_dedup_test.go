@@ -33,7 +33,7 @@ func TestAntigravityModelBaseURLs_DefaultDaily(t *testing.T) {
 		t.Fatalf("unexpected default: %v", urls)
 	}
 	if antigravityCapabilityCacheTTL != registry.ModelsRefreshInterval {
-		t.Fatal("catalog and entitlement cache must share cadence")
+		t.Fatal("Antigravity capability cache must follow the entitlement cadence")
 	}
 }
 

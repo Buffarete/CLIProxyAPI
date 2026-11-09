@@ -13,8 +13,13 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// ModelsRefreshInterval is the shared cadence for model catalogs and account entitlements.
+// ModelsRefreshInterval is the cadence for per-account entitlement probes.
 const ModelsRefreshInterval = 3 * time.Hour
+
+// ModelCatalogRefreshInterval is the cadence for remote model catalog reads.
+// It is shorter than ModelsRefreshInterval so new models route soon after the
+// catalog lists them; an unchanged catalog does not re-register models.
+const ModelCatalogRefreshInterval = 15 * time.Minute
 
 var modelsURLs = []string{
 	"https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/models.json",
@@ -67,7 +72,7 @@ func init() {
 }
 
 // StartModelsUpdater starts a background updater that fetches models
-// immediately on startup and then refreshes the model catalog every 3 hours.
+// immediately on startup and then refreshes the model catalog every 15 minutes.
 // Safe to call multiple times; only one updater will run.
 func StartModelsUpdater(ctx context.Context) {
 	generalCatalogUpdater.configure(ctx, "")
