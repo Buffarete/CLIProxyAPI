@@ -54,7 +54,7 @@ func (u *catalogUpdater) configure(ctx context.Context, source string) {
 		if source == embeddedCatalogSource {
 			return
 		}
-		ticker := time.NewTicker(ModelsRefreshInterval)
+		ticker := time.NewTicker(ModelCatalogRefreshInterval)
 		defer ticker.Stop()
 		for {
 			select {
