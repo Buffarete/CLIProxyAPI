@@ -1155,3 +1155,18 @@ func TestFileSynthesizerRecordsIncompleteFiles(t *testing.T) {
 		t.Fatalf("did not expect valid auth file %s in IncompleteFiles", validAuthPath)
 	}
 }
+
+func TestFileSynthesizer_LabelFromFile(t *testing.T) {
+	tempDir := t.TempDir()
+	data, _ := json.Marshal(map[string]any{"type": "claude", "email": "test@example.com", "label": " Claude 2 "})
+	if err := os.WriteFile(filepath.Join(tempDir, "claude-auth.json"), data, 0o600); err != nil {
+		t.Fatalf("failed to write auth file: %v", err)
+	}
+	auths, err := NewFileSynthesizer().Synthesize(&SynthesisContext{Config: &config.Config{}, AuthDir: tempDir, Now: time.Now(), IDGenerator: NewStableIDGenerator()})
+	if err != nil || len(auths) != 1 {
+		t.Fatalf("synthesize: %v, %d auths", err, len(auths))
+	}
+	if auths[0].Label != "Claude 2" {
+		t.Errorf("expected label Claude 2, got %q", auths[0].Label)
+	}
+}
