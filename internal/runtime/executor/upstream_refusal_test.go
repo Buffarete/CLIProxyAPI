@@ -157,3 +157,11 @@ func TestCodexRefusalIsRequestScopedOnlyWithoutUsageSignals(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexPassthroughPreservesTurnRateLimitRetryAfter(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Codex.DisableCodexCloaking = true
+	err := codexStatusErrOrRefusal(cfg, http.StatusTooManyRequests, http.Header{"Retry-After": {"256"}}, []byte(issue7017TurnRateLimitBody), false)
+	want := 256 * time.Second
+	issue7017AssertTransient(t, err, &want)
+}
