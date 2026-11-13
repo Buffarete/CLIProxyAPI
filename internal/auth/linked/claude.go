@@ -170,6 +170,16 @@ func lockDir(ctx context.Context, path string) (func(), error) {
 	}
 }
 
+// oauthErrorCodes are the refusal codes an error may name; any other text in a
+// token endpoint's body stays out of errors and logs.
+var oauthErrorCodes = map[string]bool{
+	"invalid_request": true, "invalid_client": true, "invalid_grant": true, "unauthorized_client": true,
+	"unsupported_grant_type": true, "invalid_scope": true, "access_denied": true, "server_error": true,
+	"temporarily_unavailable": true, "invalid_request_error": true, "authentication_error": true,
+	"permission_error": true, "not_found_error": true, "rate_limit_error": true, "api_error": true,
+	"overloaded_error": true,
+}
+
 func postJSON(ctx context.Context, client *http.Client, url string, body any, out any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -197,6 +207,9 @@ func postJSON(ctx context.Context, client *http.Client, url string, body any, ou
 		code := gjson.GetBytes(data, "error").String()
 		if strings.ContainsAny(code, "{[") || len(code) > 64 {
 			code = gjson.GetBytes(data, "error.type").String()
+		}
+		if !oauthErrorCodes[code] {
+			code = ""
 		}
 		description := gjson.GetBytes(data, "error_description").String()
 		switch description {

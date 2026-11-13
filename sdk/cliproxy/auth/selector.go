@@ -1634,7 +1634,11 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if opts.Metadata == nil {
 		opts.Metadata = make(map[string]any)
 	}
-	kept, dropped := dropNearLimit(auths, model, paced.now())
+	kept, dropped := auths, []string(nil)
+	// With rebind-on never a binding outlives paced's moves; only the fallback's room scores apply.
+	if !s.rebindOnNever {
+		kept, dropped = dropNearLimit(auths, model, paced.now())
+	}
 	if len(dropped) > 0 {
 		selectorLogEntry(ctx).Debugf("room-routing: paced leaves out accounts near a limit | dropped=%s model=%s", strings.Join(dropped, ","), model)
 	}

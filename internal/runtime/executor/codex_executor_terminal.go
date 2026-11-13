@@ -359,11 +359,12 @@ func newCodexStatusErrWithHeadersAndCooling(statusCode int, headers http.Header,
 
 // codexStatusErrOrRefusal is newCodexStatusErrWithCooling for an HTTP response,
 // except that with disable-codex-cloaking a refusal of the request
-// (helps.IsCodexRefusal, and not a usage_limit_reached or model-capacity body)
+// (helps.IsCodexRefusal, and not a usage_limit_reached or capacity body, which
+// another credential may serve)
 // becomes request-scoped, like the Claude passthrough's (Buff Cloud fork).
 func codexStatusErrOrRefusal(cfg *config.Config, statusCode int, headers http.Header, body []byte, modelLevelCooling bool) error {
 	err := newCodexStatusErrWithHeadersAndCooling(statusCode, headers, body, modelLevelCooling)
-	if cfg != nil && cfg.Codex.DisableCodexCloaking && helps.IsCodexRefusal(statusCode, headers) && !isCodexUsageLimitError(body) && !isCodexModelCapacityError(body) {
+	if cfg != nil && cfg.Codex.DisableCodexCloaking && helps.IsCodexRefusal(statusCode, headers) && !isCodexUsageLimitError(body) && !isCodexModelCapacityError(body) && !isCodexTransientCapacityError(body) {
 		return upstreamRefusalError{err}
 	}
 	return err
