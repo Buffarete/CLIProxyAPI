@@ -419,6 +419,7 @@ func TestHomeCodexAlphaSearchForwardsUnauthorizedResponseWithoutRefresh(t *testi
 		responseBody: io.NopCloser(strings.NewReader(upstreamError)),
 	}
 	server.handlers.AuthManager.RegisterExecutor(executor)
+	usageCapture := registerHomeUnauthorizedUsageCapture(t, t.Name(), "home-codex-search")
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"id":"home-search-refresh","model":"gpt-5-codex","query":"test"}`))
 	req.Header.Set("Authorization", "Bearer test-key")
@@ -426,6 +427,7 @@ func TestHomeCodexAlphaSearchForwardsUnauthorizedResponseWithoutRefresh(t *testi
 	c, _ := gin.CreateTestContext(rr)
 	c.Request = req
 	server.codexAlphaSearch(c)
+	usageCapture.wait(t)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d; body=%s", rr.Code, http.StatusUnauthorized, rr.Body.String())
