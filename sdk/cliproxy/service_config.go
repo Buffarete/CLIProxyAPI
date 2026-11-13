@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher/synthesizer"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
@@ -93,8 +94,13 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 	if state.sessionAffinity && cfg.Routing.SessionAffinitySubagents != nil {
 		state.sessionAffinitySubagents = *cfg.Routing.SessionAffinitySubagents
 	}
-	if state.sessionAffinity && strings.EqualFold(strings.TrimSpace(cfg.Routing.SessionAffinityRebindOn), coreauth.SessionAffinityRebindOnQuota) {
-		state.sessionAffinityRebindOn = coreauth.SessionAffinityRebindOnQuota
+	if state.sessionAffinity {
+		switch strings.ToLower(strings.TrimSpace(cfg.Routing.SessionAffinityRebindOn)) {
+		case coreauth.SessionAffinityRebindOnQuota:
+			state.sessionAffinityRebindOn = coreauth.SessionAffinityRebindOnQuota
+		case coreauth.SessionAffinityRebindOnNever:
+			state.sessionAffinityRebindOn = coreauth.SessionAffinityRebindOnNever
+		}
 	}
 	return state
 }
@@ -114,10 +120,18 @@ func roomStrategyOnlyChange(previous *routingRuntimeState, next routingRuntimeSt
 }
 
 func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
+	return newRoutingSelectorWithExisting(state, nil)
+}
+
+func newRoutingSelectorWithExisting(state routingRuntimeState, existing coreauth.Selector) coreauth.Selector {
 	var selector coreauth.Selector
 	switch state.strategy {
 	case "weighted-round-robin":
-		selector = &coreauth.WeightedRoundRobinSelector{}
+		if existingWeighted := coreauth.UnwrapWeightedRoundRobinSelector(existing); existingWeighted != nil {
+			selector = existingWeighted
+		} else {
+			selector = &coreauth.WeightedRoundRobinSelector{}
+		}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
 	case coreauth.RoomStrategyMostRoom, coreauth.RoomStrategySoonestReset, coreauth.RoomStrategyPaced:
@@ -173,6 +187,9 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		log.WithError(errValidate).Warn("rejected invalid model catalog sources")
 		return configCommit{}
 	}
+	// Clone before assigning the generation: callers may still hold the input snapshot.
+	newCfg = newCfg.CloneForRuntime()
+	helps.AdvanceProxyPoolGeneration(s.proxyPoolPublisher, newCfg)
 	s.cfgMu.Lock()
 	s.cfg = newCfg
 	s.cfgMu.Unlock()
@@ -219,6 +236,9 @@ func (s *Service) applyConfigRuntime(ctx context.Context, commit configCommit, s
 		return false
 	}
 	s.applyDiscoveryConfigContext(ctx, cfg)
+	if s.kvStoreManaged.Load() {
+		s.applyKVStoreConfig(cfg)
+	}
 	if errContext := ctx.Err(); errContext != nil {
 		return false
 	}
@@ -277,7 +297,7 @@ func (s *Service) applyManagerConfig(ctx context.Context, commit configCommit) b
 	routingState := normalizedRoutingRuntimeState(commit.cfg)
 	if s.appliedRoutingState == nil || *s.appliedRoutingState != routingState {
 		if !roomStrategyOnlyChange(s.appliedRoutingState, routingState) || !s.coreManager.SetRoomStrategy(routingState.strategy) {
-			s.coreManager.SetSelector(newRoutingSelector(routingState))
+			s.coreManager.SetSelector(newRoutingSelectorWithExisting(routingState, s.coreManager.Selector()))
 		}
 		s.appliedRoutingState = &routingState
 	}
@@ -364,8 +384,9 @@ func forceHomeRuntimeConfig(cfg *config.Config) {
 	cfg.UsageStatisticsEnabled = true
 	cfg.DisableCooling = true
 	cfg.SaveCooldownStatus = false
-	cfg.WebsocketAuth = false
+	cfg.WebsocketAuth = true
 	cfg.RemoteManagement.AllowRemote = false
 	cfg.RemoteManagement.DisableControlPanel = true
 	cfg.Plugins.StoreAuth = nil
+	cfg.KVStore.Disabled = true
 }
