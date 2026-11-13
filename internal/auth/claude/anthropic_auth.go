@@ -134,11 +134,12 @@ func isClaudeRefreshRetryable(err error) bool {
 // tokenResponse represents the response structure from Anthropic's OAuth token endpoint.
 // It contains access token, refresh token, and associated user/organization information.
 type tokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
-	Organization struct {
+	AccessToken           string `json:"access_token"`
+	RefreshToken          string `json:"refresh_token"`
+	TokenType             string `json:"token_type"`
+	ExpiresIn             int    `json:"expires_in"`
+	RefreshTokenExpiresIn int64  `json:"refresh_token_expires_in"`
+	Organization          struct {
 		UUID string `json:"uuid"`
 		Name string `json:"name"`
 	} `json:"organization"`
@@ -453,6 +454,10 @@ func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state stri
 		Expire:           time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
 
+	if tokenResp.RefreshTokenExpiresIn > 0 {
+		tokenData.LoginExpire = time.Now().UTC().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second).Format(time.RFC3339)
+	}
+
 	// Replay the native login companion lookups and let the profile response win
 	// where it carries identity the token response omitted.
 	if profile := o.inspectOAuthAccount(ctx, tokenResp.AccessToken); profile != nil {
@@ -592,6 +597,9 @@ func (o *ClaudeAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken
 		RefreshToken: tokenResp.RefreshToken,
 		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
+	if tokenResp.RefreshTokenExpiresIn > 0 {
+		tokenData.LoginExpire = time.Now().UTC().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second).Format(time.RFC3339)
+	}
 	profile, errProfile := o.FetchOAuthProfile(ctx, tokenResp.AccessToken)
 	if errProfile != nil {
 		log.Warnf("fetch Claude OAuth profile after refresh: %v", errProfile)
@@ -624,6 +632,7 @@ func (o *ClaudeAuth) CreateTokenStorage(bundle *ClaudeAuthBundle) *ClaudeTokenSt
 		OrganizationName: bundle.TokenData.OrganizationName,
 		DeviceIDs:        append([]string(nil), bundle.DeviceIDs...),
 		Expire:           bundle.TokenData.Expire,
+		LoginExpire:      bundle.TokenData.LoginExpire,
 	}
 
 	return storage
@@ -691,6 +700,9 @@ func (o *ClaudeAuth) UpdateTokenStorage(storage *ClaudeTokenStorage, tokenData *
 	}
 	if tokenData.OrganizationName != "" {
 		storage.OrganizationName = tokenData.OrganizationName
+	}
+	if tokenData.LoginExpire != "" {
+		storage.LoginExpire = tokenData.LoginExpire
 	}
 	storage.Expire = tokenData.Expire
 }

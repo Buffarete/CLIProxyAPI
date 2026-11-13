@@ -40,11 +40,17 @@ func (claudeProvider) read(dir string) (token, error) {
 	}
 	oauth := gjson.GetBytes(raw, "claudeAiOauth")
 	if !oauth.Exists() || oauth.Get("refreshToken").String() == "" {
+		if oauth.Get("loginEnded").String() == "time_limit" {
+			return token{}, fmt.Errorf("linked credentials: Claude Code login in %s reached its time limit; run CLAUDE_CONFIG_DIR=%s claude auth login", dir, dir)
+		}
 		return token{}, errNoToken
 	}
 	t := token{access: oauth.Get("accessToken").String(), refresh: oauth.Get("refreshToken").String()}
 	if ms := oauth.Get("expiresAt").Int(); ms > 0 {
 		t.expires = time.UnixMilli(ms)
+	}
+	if ms := oauth.Get("refreshTokenExpiresAt").Int(); ms > 0 {
+		t.loginExpires = time.UnixMilli(ms)
 	}
 	return t, nil
 }
@@ -192,7 +198,13 @@ func postJSON(ctx context.Context, client *http.Client, url string, body any, ou
 		if strings.ContainsAny(code, "{[") || len(code) > 64 {
 			code = gjson.GetBytes(data, "error.type").String()
 		}
-		return errRefreshStatus{status: resp.StatusCode, code: code}
+		description := gjson.GetBytes(data, "error_description").String()
+		switch description {
+		case "Refresh token expired", "Refresh token not found or invalid":
+		default:
+			description = ""
+		}
+		return errRefreshStatus{status: resp.StatusCode, code: code, description: description}
 	}
 	if err = json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("linked credentials: parse token refresh response: %w", err)

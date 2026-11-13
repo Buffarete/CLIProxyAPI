@@ -74,7 +74,7 @@ type buffService struct {
 }
 
 // buffFeatures are this build's feature flags, in the order they were added.
-var buffFeatures = []string{"usage-range", "usage-fields", "usage-client", "usage-reserve"}
+var buffFeatures = []string{"usage-range", "usage-fields", "usage-client", "usage-reserve", "login-expiry"}
 
 type buffCodex struct {
 	// Signals are the x-codex-* headers of the account's last response.
@@ -91,6 +91,7 @@ type buffAccount struct {
 	ObservedAt     *int64     `json:"observedAt"`
 	LastUsedAt     *int64     `json:"lastUsedAt"`
 	TokenExpiresAt *int64     `json:"tokenExpiresAt"`
+	LoginExpiresAt *int64     `json:"loginExpiresAt"`
 	Websockets     *bool      `json:"websockets,omitempty"`
 	Codex          *buffCodex `json:"codex,omitempty"`
 	// Reserve is the share of each window kept free; null when none is set.
@@ -648,6 +649,13 @@ func (h *Handler) buffAccounts(ctx context.Context, now time.Time, withCodexUsag
 			}
 		}
 		a.TokenExpiresAt = buffTokenExpiry(auth)
+		if metadata, err := buffLinkedMetadata(auth); err == nil {
+			if value, ok := metadata["login_expires_at"].(string); ok {
+				if expiry, errParse := time.Parse(time.RFC3339, value); errParse == nil {
+					a.LoginExpiresAt = epochMs(expiry)
+				}
+			}
+		}
 		if reserve := coreauth.ReserveOf(auth); !reserve.IsZero() {
 			a.Reserve = &reserve
 		}

@@ -204,6 +204,9 @@ waitForCallback:
 	metadata := map[string]any{
 		"email": tokenStorage.Email,
 	}
+	if tokenStorage.LoginExpire != "" {
+		metadata["login_expires_at"] = tokenStorage.LoginExpire
+	}
 	if tokenStorage.AccountUUID != "" {
 		metadata["account_uuid"] = tokenStorage.AccountUUID
 	}

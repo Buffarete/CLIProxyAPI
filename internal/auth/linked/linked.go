@@ -24,20 +24,21 @@ const MetadataKey = "linked_dir"
 // refreshMargin is how close to expiry both CLIs refresh on use.
 const refreshMargin = 5 * time.Minute
 
-// secretKeys are the in-memory token fields that never reach the auth file.
+// secretKeys are fields kept only in memory, never in a linked auth file.
 var secretKeys = []string{
-	"access_token", "refresh_token", "id_token", "expired", "last_refresh",
+	"access_token", "refresh_token", "id_token", "expired", "last_refresh", "login_expires_at",
 	"accessToken", "refreshToken", "idToken", "expire", "expires_at", "expiresAt", "siwc",
 }
 
 // token is what a linked credentials file holds that the proxy needs in memory.
 type token struct {
-	access      string
-	refresh     string
-	expires     time.Time
-	idToken     string
-	accountID   string
-	lastRefresh string
+	access       string
+	refresh      string
+	expires      time.Time
+	loginExpires time.Time
+	idToken      string
+	accountID    string
+	lastRefresh  string
 }
 
 func (t token) nearExpiry(now time.Time) bool {
@@ -155,6 +156,11 @@ func apply(metadata map[string]any, t token) {
 	} else {
 		metadata["expired"] = t.expires.UTC().Format(time.RFC3339)
 	}
+	if t.loginExpires.IsZero() {
+		delete(metadata, "login_expires_at")
+	} else {
+		metadata["login_expires_at"] = t.loginExpires.UTC().Format(time.RFC3339)
+	}
 	if t.idToken != "" {
 		metadata["id_token"] = t.idToken
 	}
@@ -210,15 +216,20 @@ func writeAtomic(file string, data []byte) error {
 // errRefreshStatus is a refused token refresh; the response body is not kept
 // because it may echo credentials.
 type errRefreshStatus struct {
-	status int
-	code   string
+	status      int
+	code        string
+	description string
 }
 
 func (e errRefreshStatus) Error() string {
+	message := fmt.Sprintf("linked credentials: token refresh failed with status %d", e.status)
 	if e.code != "" {
-		return fmt.Sprintf("linked credentials: token refresh failed with status %d (%s)", e.status, e.code)
+		message += " (" + e.code + ")"
 	}
-	return fmt.Sprintf("linked credentials: token refresh failed with status %d", e.status)
+	if e.description != "" {
+		message += ": " + e.description
+	}
+	return message
 }
 
 // StatusCode lets the auth manager classify a refused refresh like any other.

@@ -24,7 +24,8 @@ type ClaudeTokenData struct {
 	// OrganizationName is the display name returned by OAuth.
 	OrganizationName string `json:"organization_name"`
 	// Expire is the timestamp of the token expiry.
-	Expire string `json:"expired"`
+	Expire      string `json:"expired"`
+	LoginExpire string `json:"login_expires_at,omitempty"`
 }
 
 // ClaudeAuthBundle aggregates authentication data after OAuth flow completion

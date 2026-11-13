@@ -50,7 +50,7 @@ Authorization: Bearer <management-key>
     "commit": "ea9a9efe51c594c499b970ab3d0560549cb50e46",
     "buildDate": "2026-10-19T15:42:56Z",
     "startedAt": 1792424581676,
-    "features": ["usage-range", "usage-fields", "usage-client"]
+    "features": ["usage-range", "usage-fields", "usage-client", "usage-reserve", "login-expiry"]
   },
   "accounts": [
     {
@@ -70,7 +70,8 @@ Authorization: Bearer <management-key>
       "status": "active",
       "observedAt": 1792424509357,
       "lastUsedAt": 1792424503179,
-      "tokenExpiresAt": 1792452345000
+      "tokenExpiresAt": 1792452345000,
+      "loginExpiresAt": 1795016581676
     },
     {
       "id": "linked-codex.json",
@@ -90,6 +91,7 @@ Authorization: Bearer <management-key>
       "observedAt": 1792424585683,
       "lastUsedAt": 1792424583906,
       "tokenExpiresAt": 1793285030000,
+      "loginExpiresAt": null,
       "websockets": true,
       "codex": {
         "signals": {
@@ -150,6 +152,9 @@ Fields of each account:
 - `tier`: for a linked Claude dir, the rate-limit tier Claude Code last fetched (`default_claude_max_20x`), or `null`.
 - `lastStatus`, `lastUsedAt`: from the account's last row in the usage log (last 8 days).
 - `tokenExpiresAt`: for a linked credential, read from the dir's own credentials file.
+- `loginExpiresAt`: when Anthropic ends the Claude login, in epoch ms; `null` when unknown.
+  Stored as `login_expires_at` (RFC3339 UTC). Linked credentials read the live dir's `claudeAiOauth.refreshTokenExpiresAt`.
+  A new sign-in is required after this time. Access-token refresh does not extend the login.
 - `status`: upstream's `active`, `error` or `disabled`. `statusMessage` appears with errors.
 - `codex.signals`: the `x-codex-*` headers of the last Codex response or WebSocket rate-limit event.
 - `codex.usage`: the ChatGPT backend's `GET /backend-api/wham/usage`, the call Codex's `/status` makes.
@@ -169,6 +174,7 @@ the key is older than all of them.
 | `usage-fields` | Rows carry `error`, `ttftMs`, `tokens.reasoning`, `stream`, `requestedModel`, `endpoint`; rows with no account are logged. |
 | `usage-client` | Rows carry `client`, `clientVersion`, `routine`, `thread`. |
 | `usage-reserve` | Accounts carry `reserve` and `held`; `PATCH /buff/reserve`. |
+| `login-expiry` | Accounts carry `loginExpiresAt` (epoch ms, or `null` when unknown). |
 
 ## GET /buff/usage
 

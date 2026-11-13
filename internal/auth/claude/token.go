@@ -50,6 +50,8 @@ type ClaudeTokenStorage struct {
 	// Expire is the timestamp when the current access token expires.
 	Expire string `json:"expired"`
 
+	LoginExpire string `json:"login_expires_at,omitempty"`
+
 	// Metadata holds arbitrary key-value pairs injected via hooks.
 	// It is not exported to JSON directly to allow flattening during serialization.
 	Metadata map[string]any `json:"-"`
