@@ -174,16 +174,17 @@ func TestManagerTerminalUnauthorizedDoesNotRefresh(t *testing.T) {
 }
 
 func invokeTerminalResponse(manager *Manager, provider, model, mode string) error {
+	ctx := withUA(claudeCodeUA)
 	req := cliproxyexecutor.Request{Model: model}
 	switch mode {
 	case "execute":
-		_, errExecute := manager.Execute(context.Background(), []string{provider}, req, cliproxyexecutor.Options{})
+		_, errExecute := manager.Execute(ctx, []string{provider}, req, cliproxyexecutor.Options{})
 		return errExecute
 	case "count":
-		_, errCount := manager.ExecuteCount(context.Background(), []string{provider}, req, cliproxyexecutor.Options{})
+		_, errCount := manager.ExecuteCount(ctx, []string{provider}, req, cliproxyexecutor.Options{})
 		return errCount
 	default:
-		stream, errStream := manager.ExecuteStream(context.Background(), []string{provider}, req, cliproxyexecutor.Options{Stream: true})
+		stream, errStream := manager.ExecuteStream(ctx, []string{provider}, req, cliproxyexecutor.Options{Stream: true})
 		if errStream != nil {
 			return errStream
 		}

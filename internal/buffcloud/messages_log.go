@@ -247,10 +247,6 @@ func (w *teeWriter) FlushError() error { return httpwire.FlushResponse(w.Respons
 // Unwrap is the wrapped writer.
 func (w *teeWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-type errReader struct{ err error }
-
-func (r errReader) Read([]byte) (int, error) { return 0, r.err }
-
 type readCloser struct {
 	io.Reader
 	io.Closer
@@ -265,14 +261,9 @@ func (l *MessagesLog) Middleware() gin.HandlerFunc {
 			return
 		}
 		original := c.Request.Body
-		body, err := io.ReadAll(original)
-		if err != nil {
-			// A body over the size limit, or a broken one: the handler meets the same error.
-			c.Request.Body = readCloser{io.MultiReader(bytes.NewReader(body), errReader{err}), original}
-			c.Next()
-			return
-		}
-		c.Request.Body = readCloser{bytes.NewReader(body), original}
+		var captured bytes.Buffer
+		// Capture only bytes the handler reads, so authentication can reject unread bodies.
+		c.Request.Body = readCloser{io.TeeReader(original, &captured), original}
 		started := time.Now()
 		tee := &teeWriter{ResponseWriter: c.Writer}
 		c.Writer = tee
@@ -286,6 +277,7 @@ func (l *MessagesLog) Middleware() gin.HandlerFunc {
 			Status:  tee.Status(),
 			Ms:      time.Since(started).Milliseconds(),
 		}
+		body := captured.Bytes()
 		var model struct {
 			Model string `json:"model"`
 		}
