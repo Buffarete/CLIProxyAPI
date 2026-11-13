@@ -34,6 +34,10 @@ const (
 	RedirectURI      = "http://localhost:54545/callback"
 	ClaudeOAuthScope = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 
+	// Native Claude Code includes the Console scope when authorizing a new login.
+	// Keep the established token refresh scope unchanged.
+	claudeOAuthAuthorizeScope = "org:create_api_key " + ClaudeOAuthScope
+
 	claudeRefreshMinBackoff       = 5 * time.Second
 	claudeRefreshMaxBackoff       = 5 * time.Minute
 	claudeRefreshTimeout          = 30 * time.Second
@@ -130,11 +134,12 @@ func isClaudeRefreshRetryable(err error) bool {
 // tokenResponse represents the response structure from Anthropic's OAuth token endpoint.
 // It contains access token, refresh token, and associated user/organization information.
 type tokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
-	Organization struct {
+	AccessToken           string `json:"access_token"`
+	RefreshToken          string `json:"refresh_token"`
+	TokenType             string `json:"token_type"`
+	ExpiresIn             int    `json:"expires_in"`
+	RefreshTokenExpiresIn int64  `json:"refresh_token_expires_in"`
+	Organization          struct {
 		UUID string `json:"uuid"`
 		Name string `json:"name"`
 	} `json:"organization"`
@@ -330,7 +335,7 @@ func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string
 		"client_id":             {ClientID},
 		"response_type":         {"code"},
 		"redirect_uri":          {RedirectURI},
-		"scope":                 {ClaudeOAuthScope},
+		"scope":                 {claudeOAuthAuthorizeScope},
 		"code_challenge":        {pkceCodes.CodeChallenge},
 		"code_challenge_method": {"S256"},
 		"state":                 {state},
@@ -447,6 +452,10 @@ func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state stri
 		OrganizationUUID: tokenResp.Organization.UUID,
 		OrganizationName: tokenResp.Organization.Name,
 		Expire:           time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
+	}
+
+	if tokenResp.RefreshTokenExpiresIn > 0 {
+		tokenData.LoginExpire = time.Now().UTC().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second).Format(time.RFC3339)
 	}
 
 	// Replay the native login companion lookups and let the profile response win
@@ -588,6 +597,9 @@ func (o *ClaudeAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken
 		RefreshToken: tokenResp.RefreshToken,
 		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
+	if tokenResp.RefreshTokenExpiresIn > 0 {
+		tokenData.LoginExpire = time.Now().UTC().Add(time.Duration(tokenResp.RefreshTokenExpiresIn) * time.Second).Format(time.RFC3339)
+	}
 	profile, errProfile := o.FetchOAuthProfile(ctx, tokenResp.AccessToken)
 	if errProfile != nil {
 		log.Warnf("fetch Claude OAuth profile after refresh: %v", errProfile)
@@ -620,6 +632,7 @@ func (o *ClaudeAuth) CreateTokenStorage(bundle *ClaudeAuthBundle) *ClaudeTokenSt
 		OrganizationName: bundle.TokenData.OrganizationName,
 		DeviceIDs:        append([]string(nil), bundle.DeviceIDs...),
 		Expire:           bundle.TokenData.Expire,
+		LoginExpire:      bundle.TokenData.LoginExpire,
 	}
 
 	return storage
@@ -687,6 +700,9 @@ func (o *ClaudeAuth) UpdateTokenStorage(storage *ClaudeTokenStorage, tokenData *
 	}
 	if tokenData.OrganizationName != "" {
 		storage.OrganizationName = tokenData.OrganizationName
+	}
+	if tokenData.LoginExpire != "" {
+		storage.LoginExpire = tokenData.LoginExpire
 	}
 	storage.Expire = tokenData.Expire
 }

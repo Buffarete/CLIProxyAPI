@@ -40,11 +40,17 @@ func (claudeProvider) read(dir string) (token, error) {
 	}
 	oauth := gjson.GetBytes(raw, "claudeAiOauth")
 	if !oauth.Exists() || oauth.Get("refreshToken").String() == "" {
+		if oauth.Get("loginEnded").String() == "time_limit" {
+			return token{}, fmt.Errorf("linked credentials: Claude Code login in %s reached its time limit; run CLAUDE_CONFIG_DIR=%s claude auth login", dir, dir)
+		}
 		return token{}, errNoToken
 	}
 	t := token{access: oauth.Get("accessToken").String(), refresh: oauth.Get("refreshToken").String()}
 	if ms := oauth.Get("expiresAt").Int(); ms > 0 {
 		t.expires = time.UnixMilli(ms)
+	}
+	if ms := oauth.Get("refreshTokenExpiresAt").Int(); ms > 0 {
+		t.loginExpires = time.UnixMilli(ms)
 	}
 	return t, nil
 }
@@ -164,6 +170,16 @@ func lockDir(ctx context.Context, path string) (func(), error) {
 	}
 }
 
+// oauthErrorCodes are the refusal codes an error may name; any other text in a
+// token endpoint's body stays out of errors and logs.
+var oauthErrorCodes = map[string]bool{
+	"invalid_request": true, "invalid_client": true, "invalid_grant": true, "unauthorized_client": true,
+	"unsupported_grant_type": true, "invalid_scope": true, "access_denied": true, "server_error": true,
+	"temporarily_unavailable": true, "invalid_request_error": true, "authentication_error": true,
+	"permission_error": true, "not_found_error": true, "rate_limit_error": true, "api_error": true,
+	"overloaded_error": true,
+}
+
 func postJSON(ctx context.Context, client *http.Client, url string, body any, out any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -192,7 +208,16 @@ func postJSON(ctx context.Context, client *http.Client, url string, body any, ou
 		if strings.ContainsAny(code, "{[") || len(code) > 64 {
 			code = gjson.GetBytes(data, "error.type").String()
 		}
-		return errRefreshStatus{status: resp.StatusCode, code: code}
+		if !oauthErrorCodes[code] {
+			code = ""
+		}
+		description := gjson.GetBytes(data, "error_description").String()
+		switch description {
+		case "Refresh token expired", "Refresh token not found or invalid":
+		default:
+			description = ""
+		}
+		return errRefreshStatus{status: resp.StatusCode, code: code, description: description}
 	}
 	if err = json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("linked credentials: parse token refresh response: %w", err)

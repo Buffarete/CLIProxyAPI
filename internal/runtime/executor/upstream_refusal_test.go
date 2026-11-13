@@ -157,3 +157,48 @@ func TestCodexRefusalIsRequestScopedOnlyWithoutUsageSignals(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexPassthroughPreservesTurnRateLimitRetryAfter(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Codex.DisableCodexCloaking = true
+	err := codexStatusErrOrRefusal(cfg, http.StatusTooManyRequests, http.Header{"Retry-After": {"256"}}, []byte(issue7017TurnRateLimitBody), false)
+	want := 256 * time.Second
+	issue7017AssertTransient(t, err, &want)
+}
+
+type turnRateLimitOnceExecutor struct {
+	*CodexExecutor
+	calls int
+}
+
+func (e *turnRateLimitOnceExecutor) ForAPIKey() cliproxyauth.ProviderExecutor { return e }
+
+func (e *turnRateLimitOnceExecutor) Execute(_ context.Context, _ *cliproxyauth.Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	e.calls++
+	if e.calls == 1 {
+		return cliproxyexecutor.Response{}, codexStatusErrOrRefusal(e.cfg, http.StatusTooManyRequests, nil, []byte(issue7017TurnRateLimitBody), false)
+	}
+	return cliproxyexecutor.Response{Payload: []byte(`{"id":"resp_ok","status":"completed","output":[]}`)}, nil
+}
+
+func TestCodexPassthroughTurnRateLimitWithoutHeadersFailsOver(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Codex.DisableCodexCloaking = true
+	executor := &turnRateLimitOnceExecutor{CodexExecutor: NewCodexExecutor(cfg)}
+	manager := cliproxyauth.NewManager(nil, nil, nil)
+	manager.SetConfig(cfg)
+	manager.RegisterExecutor(executor)
+	reg := registry.GetGlobalRegistry()
+	const model = "turn-rate-failover-model"
+	for _, id := range []string{"turn-rate-a", "turn-rate-b"} {
+		reg.RegisterClient(id, "codex", []*registry.ModelInfo{{ID: model}})
+		t.Cleanup(func() { reg.UnregisterClient(id) })
+		if _, err := manager.Register(context.Background(), &cliproxyauth.Auth{ID: id, Provider: "codex", Attributes: map[string]string{"api_key": "test-key"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := manager.Execute(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: model, Payload: []byte(`{"input":"hi"}`)}, cliproxyexecutor.Options{})
+	if err != nil || executor.calls != 2 {
+		t.Fatalf("calls = %d, err = %v; want a turn rate limit to move to the second credential and succeed", executor.calls, err)
+	}
+}

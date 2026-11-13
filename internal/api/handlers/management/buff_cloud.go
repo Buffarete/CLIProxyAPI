@@ -74,7 +74,7 @@ type buffService struct {
 }
 
 // buffFeatures are this build's feature flags, in the order they were added.
-var buffFeatures = []string{"usage-range", "usage-fields", "usage-client", "usage-reserve"}
+var buffFeatures = []string{"usage-range", "usage-fields", "usage-client", "usage-reserve", "login-expiry"}
 
 type buffCodex struct {
 	// Signals are the x-codex-* headers of the account's last response.
@@ -91,6 +91,7 @@ type buffAccount struct {
 	ObservedAt     *int64     `json:"observedAt"`
 	LastUsedAt     *int64     `json:"lastUsedAt"`
 	TokenExpiresAt *int64     `json:"tokenExpiresAt"`
+	LoginExpiresAt *int64     `json:"loginExpiresAt"`
 	Websockets     *bool      `json:"websockets,omitempty"`
 	Codex          *buffCodex `json:"codex,omitempty"`
 	// Reserve is the share of each window kept free; null when none is set.
@@ -647,7 +648,7 @@ func (h *Handler) buffAccounts(ctx context.Context, now time.Time, withCodexUsag
 				a.LastStatus, a.LastUsedAt = &status, &at
 			}
 		}
-		a.TokenExpiresAt = buffTokenExpiry(auth)
+		a.TokenExpiresAt, a.LoginExpiresAt = buffExpiries(auth)
 		if reserve := coreauth.ReserveOf(auth); !reserve.IsZero() {
 			a.Reserve = &reserve
 		}
@@ -698,16 +699,23 @@ func buffLinkedMetadata(auth *coreauth.Auth) (map[string]any, error) {
 	return metadata, linked.Sync(metadata)
 }
 
-func buffTokenExpiry(auth *coreauth.Auth) *int64 {
+// buffExpiries returns when the access token and the login itself end, read once
+// from a linked dir for linked accounts.
+func buffExpiries(auth *coreauth.Auth) (token, login *int64) {
 	metadata, err := buffLinkedMetadata(auth)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	view := &coreauth.Auth{Metadata: metadata, Attributes: auth.Attributes}
 	if exp, ok := view.AccessTokenExpirationTime(); ok {
-		return epochMs(exp)
+		token = epochMs(exp)
 	}
-	return nil
+	if value, ok := metadata["login_expires_at"].(string); ok {
+		if exp, errParse := time.Parse(time.RFC3339, value); errParse == nil {
+			login = epochMs(exp)
+		}
+	}
+	return token, login
 }
 
 func buffCodexCredential(auth *coreauth.Auth) (buffcloud.CodexCredential, error) {

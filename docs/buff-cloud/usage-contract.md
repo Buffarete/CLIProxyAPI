@@ -13,6 +13,7 @@ new proxy, and the new Buff Cloud must keep working with the old proxy (it featu
 | `usage-range` | P1 | `/buff/usage` takes `until`, filters, `limit`, `cursor`; `/buff/usage/series` exists; daily files |
 | `usage-fields` | P2 | Rows carry `error`, `ttftMs`, `tokens.reasoning`, `stream`, `requestedModel`, `endpoint`; rows with no account |
 | `usage-client` | P3 | Rows carry `client`, `clientVersion`, `routine`, `thread` |
+| `login-expiry` | Login | Accounts carry `loginExpiresAt`: the Claude login end time in epoch ms, or `null` when unknown |
 
 ## Row (one per upstream attempt, as today)
 

@@ -2,9 +2,15 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -129,6 +135,7 @@ func TestExchangeCodeForTokensUsesNative220ControlPlaneShape(t *testing.T) {
 	var order []string
 	headers := make(map[string]http.Header)
 	var tokenBody []byte
+	state := strings.Repeat("Ab9-_", 8) + "AbA"
 
 	auth := &ClaudeAuth{
 		httpClient: &http.Client{
@@ -168,7 +175,7 @@ func TestExchangeCodeForTokensUsesNative220ControlPlaneShape(t *testing.T) {
 		},
 	}
 
-	bundle, errExchange := auth.ExchangeCodeForTokens(t.Context(), "auth-code", "state-value", &PKCECodes{CodeVerifier: "verifier"})
+	bundle, errExchange := auth.ExchangeCodeForTokens(t.Context(), "auth-code", state, &PKCECodes{CodeVerifier: "verifier"})
 	if errExchange != nil {
 		t.Fatalf("ExchangeCodeForTokens() error = %v", errExchange)
 	}
@@ -184,7 +191,7 @@ func TestExchangeCodeForTokensUsesNative220ControlPlaneShape(t *testing.T) {
 	}
 
 	// Key order mirrors the captured native exchange body.
-	wantBody := `{"grant_type":"authorization_code","code":"auth-code","redirect_uri":"` + RedirectURI + `","client_id":"` + ClientID + `","code_verifier":"verifier","state":"state-value"}`
+	wantBody := `{"grant_type":"authorization_code","code":"auth-code","redirect_uri":"` + RedirectURI + `","client_id":"` + ClientID + `","code_verifier":"verifier","state":"` + state + `"}`
 	if got := string(tokenBody); got != wantBody {
 		t.Fatalf("exchange body = %q, want %q", got, wantBody)
 	}
@@ -499,7 +506,7 @@ func TestRefreshTokensUsesNative220ControlPlaneShape(t *testing.T) {
 					if errRead != nil {
 						t.Fatal(errRead)
 					}
-					wantBody := `{"client_id":"` + ClientID + `","grant_type":"refresh_token","refresh_token":"` + refreshToken + `","scope":"` + ClaudeOAuthScope + `"}`
+					wantBody := `{"client_id":"` + ClientID + `","grant_type":"refresh_token","refresh_token":"` + refreshToken + `","scope":"user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"}`
 					if got := string(body); got != wantBody {
 						t.Fatalf("refresh body = %q, want %q", got, wantBody)
 					}
@@ -626,5 +633,122 @@ func TestUpdateTokenStoragePreservesAccountWhenRefreshOmitsIt(t *testing.T) {
 	}
 	if storage.OrganizationUUID != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" || storage.OrganizationName != "Example Org" {
 		t.Fatalf("organization = %q/%q, want preserved", storage.OrganizationUUID, storage.OrganizationName)
+	}
+}
+
+func TestClaudeLoginExpiryFromTokenEndpoint(t *testing.T) {
+	for _, operation := range []string{"exchange", "refresh"} {
+		for _, lifetime := range []int64{3600, 0, -1} {
+			t.Run(operation+"/"+fmt.Sprint(lifetime), func(t *testing.T) {
+				resetClaudeRefreshState()
+				defer resetClaudeRefreshState()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					response := map[string]any{"access_token": "test-access", "refresh_token": "test-refresh", "expires_in": 3600}
+					if lifetime != 0 {
+						response["refresh_token_expires_in"] = lifetime
+					}
+					if r.URL.Path != "/v1/oauth/token" {
+						response = map[string]any{}
+					}
+					if err := json.NewEncoder(w).Encode(response); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				target, err := url.Parse(server.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				auth := &ClaudeAuth{httpClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					req.URL.Scheme, req.URL.Host = target.Scheme, target.Host
+					return server.Client().Transport.RoundTrip(req)
+				})}}
+				before := time.Now().UTC()
+				var data *ClaudeTokenData
+				if operation == "exchange" {
+					bundle, errExchange := auth.ExchangeCodeForTokens(t.Context(), "test-code", "test-state", &PKCECodes{CodeVerifier: "test-verifier"})
+					if errExchange != nil {
+						t.Fatal(errExchange)
+					}
+					data = &bundle.TokenData
+				} else {
+					var errRefresh error
+					data, errRefresh = auth.RefreshTokens(t.Context(), "test-refresh")
+					if errRefresh != nil {
+						t.Fatal(errRefresh)
+					}
+				}
+				raw, err := json.Marshal(data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var fields map[string]any
+				if err = json.Unmarshal(raw, &fields); err != nil {
+					t.Fatal(err)
+				}
+				expiry, _ := fields["login_expires_at"].(string)
+				if lifetime <= 0 {
+					if expiry != "" {
+						t.Fatalf("login_expires_at = %q, want unknown", expiry)
+					}
+					return
+				}
+				parsed, err := time.Parse(time.RFC3339, expiry)
+				if err != nil {
+					t.Fatalf("login_expires_at = %q, want RFC3339 login end time: %v", expiry, err)
+				}
+				if parsed.Before(before.Add(time.Duration(lifetime)*time.Second-time.Second)) || parsed.After(time.Now().UTC().Add(time.Duration(lifetime)*time.Second)) {
+					t.Fatalf("login_expires_at = %q, want now + %d seconds", expiry, lifetime)
+				}
+				storage := auth.CreateTokenStorage(&ClaudeAuthBundle{TokenData: *data})
+				file := filepath.Join(t.TempDir(), "auth.json")
+				if err = storage.SaveTokenToFile(file); err != nil {
+					t.Fatal(err)
+				}
+				raw, err = os.ReadFile(file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = json.Unmarshal(raw, &fields); err != nil {
+					t.Fatal(err)
+				}
+				if fields["login_expires_at"] != expiry {
+					t.Fatalf("stored login_expires_at = %v, want %s", fields["login_expires_at"], expiry)
+				}
+			})
+		}
+	}
+}
+
+func TestUpdateTokenStoragePreservesLoginExpiry(t *testing.T) {
+	const oldExpiry = "2026-12-01T12:00:00Z"
+	const newExpiry = "2026-12-02T12:00:00Z"
+	for _, next := range []string{"", newExpiry} {
+		t.Run(next, func(t *testing.T) {
+			var storage ClaudeTokenStorage
+			if err := json.Unmarshal([]byte(`{"login_expires_at":"`+oldExpiry+`"}`), &storage); err != nil {
+				t.Fatal(err)
+			}
+			var data ClaudeTokenData
+			if err := json.Unmarshal([]byte(`{"login_expires_at":"`+next+`"}`), &data); err != nil {
+				t.Fatal(err)
+			}
+			(&ClaudeAuth{}).UpdateTokenStorage(&storage, &data)
+			raw, err := json.Marshal(storage)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]any
+			if err = json.Unmarshal(raw, &fields); err != nil {
+				t.Fatal(err)
+			}
+			want := next
+			if want == "" {
+				want = oldExpiry
+			}
+			if fields["login_expires_at"] != want {
+				t.Fatalf("updated login_expires_at = %v, want %s", fields["login_expires_at"], want)
+			}
+		})
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
+
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -121,5 +123,42 @@ func TestCodexRoutingHintNotAddedWhenCloakingDisabled(t *testing.T) {
 	applyCodexRoutingHint(context.Background(), &config.Config{}, headers, auth, "gpt-6.1-sol", body, http.Header{})
 	if got := headers.Get(codexRoutingHintHeader); got != "model=gpt-6.1-sol" {
 		t.Fatalf("cloaking on: routing hint %q, want upstream behaviour", got)
+	}
+}
+
+func TestClaudePassthroughPayloadRulesRemainFinal(t *testing.T) {
+	for _, mode := range []string{"execute", "stream", "count"} {
+		t.Run(mode, func(t *testing.T) {
+			models := []config.PayloadModelRule{{Name: "*"}}
+			cfg := &config.Config{DisableClaudeCloakMode: true, Payload: config.PayloadConfig{
+				Override: []config.PayloadRule{{Models: models, Params: map[string]any{"metadata.user_id": "configured"}}},
+				Filter:   []config.PayloadFilterRule{{Models: models, Params: []string{"system", "max_tokens", "messages.0"}}},
+			}}
+			payload := []byte(`{"model":"claude-opus-5","max_tokens":100,"system":"caller system","metadata":{"user_id":"caller","caller_tag":"preserved"},"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"},{"role":"user","content":"third"}]}`)
+			var body []byte
+			if mode == "count" {
+				transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+					body, _ = io.ReadAll(req.Body)
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Request: req,
+						Body: io.NopCloser(strings.NewReader(`{"input_tokens":12}`))}, nil
+				})
+				ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", http.RoundTripper(transport))
+				auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "sk-ant-oat01-test"}, Metadata: claudeOAuthTestMetadata()}
+				_, err := NewClaudeExecutor(cfg).CountTokens(ctx, auth, cliproxyexecutor.Request{Model: "claude-opus-5", Payload: payload}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude})
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				body = executeClaudeContextManagementRequest(t, cfg, payload, mode == "stream")
+			}
+			for _, field := range []string{"system", "max_tokens"} {
+				if ojson.GetBytes(body, field).Exists() {
+					t.Fatalf("filtered %s was restored: %s", field, body)
+				}
+			}
+			if ojson.GetBytes(body, "metadata.caller_tag").String() != "preserved" || ojson.GetBytes(body, "metadata.user_id").String() != "configured" || ojson.GetBytes(body, "messages.#").Int() != 2 {
+				t.Fatalf("payload rules were overwritten or repeated: %s", body)
+			}
+		})
 	}
 }

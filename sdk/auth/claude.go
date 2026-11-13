@@ -56,7 +56,7 @@ func (a *ClaudeAuthenticator) Login(ctx context.Context, cfg *config.Config, opt
 		return nil, fmt.Errorf("claude pkce generation failed: %w", err)
 	}
 
-	state, err := misc.GenerateRandomState()
+	state, err := claude.GenerateState()
 	if err != nil {
 		return nil, fmt.Errorf("claude state generation failed: %w", err)
 	}
@@ -203,6 +203,9 @@ waitForCallback:
 	fileName := claude.CredentialFileName(tokenStorage.Email, tokenStorage.OrganizationUUID, tokenStorage.AccountUUID)
 	metadata := map[string]any{
 		"email": tokenStorage.Email,
+	}
+	if tokenStorage.LoginExpire != "" {
+		metadata["login_expires_at"] = tokenStorage.LoginExpire
 	}
 	if tokenStorage.AccountUUID != "" {
 		metadata["account_uuid"] = tokenStorage.AccountUUID

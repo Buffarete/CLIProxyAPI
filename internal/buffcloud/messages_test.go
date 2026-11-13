@@ -1,6 +1,7 @@
 package buffcloud
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -175,10 +176,9 @@ func TestMiddlewareRecordsTheTurnWithItsAccount(t *testing.T) {
 	r.Use(TagsMiddleware())
 	r.Use(l.Middleware())
 	r.POST("/v1/chat/completions", func(c *gin.Context) {
-		body := make([]byte, 64)
-		n, _ := c.Request.Body.Read(body)
-		if n == 0 {
-			t.Error("the handler must still read the body")
+		body, err := io.ReadAll(c.Request.Body)
+		if err != nil || len(body) == 0 {
+			t.Fatalf("the handler must still read the body: %v", err)
 		}
 		c.JSON(http.StatusOK, gin.H{"choices": []gin.H{{"message": gin.H{"content": "pong"}}}})
 	})
