@@ -52,7 +52,7 @@ func RefreshLinkedAuth(ctx context.Context, cfg *config.Config, auth *cliproxyau
 // Disk and refresh operations work on a private map without holding that lock.
 func linkedAuthMetadata(auth *cliproxyauth.Auth) map[string]any {
 	metadata := make(map[string]any)
-	for _, key := range []string{"type", linked.MetadataKey, "access_token", "refresh_token", "expired", "id_token", "account_id", "last_refresh"} {
+	for _, key := range []string{"type", linked.MetadataKey, "access_token", "refresh_token", "expired", "login_expires_at", "id_token", "account_id", "last_refresh"} {
 		if value := claudeauth.ReadMetadataString(&auth.Metadata, key); value != "" {
 			metadata[key] = value
 		}
@@ -61,7 +61,7 @@ func linkedAuthMetadata(auth *cliproxyauth.Auth) map[string]any {
 }
 
 func storeLinkedAuthMetadata(auth *cliproxyauth.Auth, metadata map[string]any) {
-	for _, key := range []string{"access_token", "refresh_token", "expired", "id_token", "account_id", "last_refresh"} {
+	for _, key := range []string{"access_token", "refresh_token", "expired", "login_expires_at", "id_token", "account_id", "last_refresh"} {
 		claudeauth.StoreMetadataValue(&auth.Metadata, key, metadata[key])
 	}
 }
