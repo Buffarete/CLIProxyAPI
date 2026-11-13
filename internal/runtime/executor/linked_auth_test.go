@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
@@ -78,5 +81,40 @@ func TestCodexExecutorPreparesOnlyLinkedAuth(t *testing.T) {
 	}
 	if exec.ShouldPrepareRequestAuth(prepared) {
 		t.Fatal("synced linked auth asks to be prepared again")
+	}
+}
+
+func TestLinkedAuthPreparationSharesClaudeMetadataLock(t *testing.T) {
+	dir := t.TempDir()
+	expires := strconv.FormatInt(time.Now().Add(time.Hour).UnixMilli(), 10)
+	data := `{"claudeAiOauth":{"accessToken":"linked-access","refreshToken":"linked-refresh","expiresAt":` + expires + `}}`
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := &cliproxyauth.Auth{Provider: "claude", Metadata: map[string]any{"type": "claude", "linked_dir": dir}}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range 32 {
+		wg.Go(func() {
+			<-start
+			for range 10 {
+				if i%2 == 0 {
+					claudeauth.StoreMetadataString(&auth.Metadata, "account_uuid", "account")
+					continue
+				}
+				_ = helps.LinkedAuthNeedsPrepare(auth)
+				if _, err := helps.PrepareLinkedAuth(context.Background(), nil, auth); err != nil {
+					t.Errorf("PrepareLinkedAuth: %v", err)
+				}
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	if got := claudeauth.ReadMetadataString(&auth.Metadata, "access_token"); got != "linked-access" {
+		t.Fatal("linked token was not loaded")
+	}
+	if got := claudeauth.ReadMetadataString(&auth.Metadata, "account_uuid"); got != "account" {
+		t.Fatal("Claude profile metadata was lost")
 	}
 }
