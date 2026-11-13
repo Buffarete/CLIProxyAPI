@@ -332,3 +332,58 @@ func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+func TestClaudeSyncLoginExpiry(t *testing.T) {
+	dir := claudeDir(t, "test-access", now.Add(time.Hour))
+	expiry := now.Add(30 * 24 * time.Hour)
+	raw := strings.Replace(claudeCredentials("test-access", now.Add(time.Hour)), `"refreshTokenExpiresAt":1`, `"refreshTokenExpiresAt":`+jsonNumber(expiry.UnixMilli()), 1)
+	writeFile(t, claudeCredentialsPath(dir), raw)
+	metadata := map[string]any{"type": "claude", MetadataKey: dir}
+	if err := Sync(metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["login_expires_at"] != expiry.Format(time.RFC3339) {
+		t.Errorf("synced login_expires_at = %v, want %s", metadata["login_expires_at"], expiry.Format(time.RFC3339))
+	}
+	if _, ok := StoreFields(map[string]any{"type": "claude", MetadataKey: dir, "login_expires_at": expiry.Format(time.RFC3339)})["login_expires_at"]; ok {
+		t.Error("StoreFields retained login_expires_at")
+	}
+	writeFile(t, claudeCredentialsPath(dir), strings.Replace(raw, `,"refreshTokenExpiresAt":`+jsonNumber(expiry.UnixMilli()), "", 1))
+	metadata["login_expires_at"] = "stale"
+	if err := Sync(metadata); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := metadata["login_expires_at"]; ok {
+		t.Error("Sync retained stale login_expires_at when the file has no login end time")
+	}
+}
+
+func TestClaudeSyncLoginTimeLimit(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, claudeCredentialsPath(dir), `{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0,"loginEnded":"time_limit"}}`)
+	err := Sync(map[string]any{"type": "claude", MetadataKey: dir})
+	if err == nil || !strings.Contains(err.Error(), "time limit") || !strings.Contains(err.Error(), "CLAUDE_CONFIG_DIR="+dir+" claude auth login") {
+		t.Fatalf("Sync error = %v, want login time limit and sign-in command for %s", err, dir)
+	}
+}
+
+func TestClaudeRefreshSafeErrorDescription(t *testing.T) {
+	for _, description := range []string{"Refresh token expired", "Refresh token not found or invalid", "do not disclose test-credential"} {
+		t.Run(description, func(t *testing.T) {
+			dir := claudeDir(t, "test-access", now)
+			reply, err := json.Marshal(map[string]string{"error": "invalid_grant", "error_description": description})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokenServer(t, 400, string(reply), &claudeTokenURL)
+			err = Refresh(t.Context(), nil, map[string]any{"type": "claude", MetadataKey: dir}, true, now)
+			if err == nil {
+				t.Fatal("Refresh succeeded, want refused token refresh")
+			}
+			wantDescription := description != "do not disclose test-credential"
+			if strings.Contains(err.Error(), description) != wantDescription {
+				t.Fatalf("Refresh error = %q, description included = %t", err, wantDescription)
+			}
+		})
+	}
+}

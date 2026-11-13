@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/buffcloud"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 // buffUsageServer serves the usage routes over a log holding rows.
@@ -136,5 +137,60 @@ func TestBuffAccountsListsFeatures(t *testing.T) {
 	features, _ := service["features"].([]any)
 	if len(features) == 0 || features[0] != "usage-range" {
 		t.Errorf("features = %v", service["features"])
+	}
+}
+
+func TestBuffAccountsLoginExpiry(t *testing.T) {
+	const expiry = "2026-12-01T12:00:00Z"
+	parsed, err := time.Parse(time.RFC3339, expiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"known", "unknown", "linked", "invalid"} {
+		t.Run(kind, func(t *testing.T) {
+			metadata := map[string]any{"type": "claude"}
+			var want any
+			switch kind {
+			case "known":
+				metadata["login_expires_at"] = expiry
+				want = float64(parsed.UnixMilli())
+			case "invalid":
+				metadata["login_expires_at"] = "invalid"
+			case "linked":
+				dir := t.TempDir()
+				raw := `{"claudeAiOauth":{"accessToken":"test-access","refreshToken":"test-refresh","refreshTokenExpiresAt":` + itoa(parsed.UnixMilli()) + `}}`
+				if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				metadata["linked_dir"] = dir
+				metadata["login_expires_at"] = "2000-01-01T00:00:00Z"
+				want = float64(parsed.UnixMilli())
+			}
+			file := filepath.Join(t.TempDir(), "test.json")
+			if err := os.WriteFile(file, []byte(`{"type":"claude"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s := newBuffTestServer(t, &coreauth.Auth{ID: "test.json", FileName: "test.json", Provider: "claude", Metadata: metadata, Attributes: map[string]string{"path": file}})
+			body := s.do(http.MethodGet, "/v8/management/buff/accounts", "", http.StatusOK)
+			accounts := body["accounts"].([]any)
+			if len(accounts) != 1 {
+				t.Fatalf("accounts count = %d, want 1", len(accounts))
+			}
+			account := accounts[0].(map[string]any)
+			got, exists := account["loginExpiresAt"]
+			if !exists || got != want {
+				t.Errorf("loginExpiresAt = %v (present %t), want %v", got, exists, want)
+			}
+			features := body["service"].(map[string]any)["features"].([]any)
+			found := false
+			for _, feature := range features {
+				if feature == "login-expiry" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("features = %v, want login-expiry", features)
+			}
+		})
 	}
 }
