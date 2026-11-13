@@ -387,3 +387,20 @@ func TestClaudeRefreshSafeErrorDescription(t *testing.T) {
 		})
 	}
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRefreshErrorKeepsOnlyKnownOAuthCodes(t *testing.T) {
+	const marker = "sk-ant-ort01-not-a-real-token"
+	for _, body := range []string{`{"error":{"type":"` + marker + `"}}`, `{"error":"` + marker + `"}`} {
+		client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})}
+		err := postJSON(context.Background(), client, "https://token.invalid", map[string]string{}, &struct{}{})
+		if err == nil || strings.Contains(err.Error(), marker) {
+			t.Fatalf("error = %v; want a refused refresh without response text", err)
+		}
+	}
+}

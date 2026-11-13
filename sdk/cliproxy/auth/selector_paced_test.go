@@ -254,3 +254,22 @@ func TestPacedSendsNoSessionToAStaleSpentWeek(t *testing.T) {
 		}
 	}
 }
+
+func TestPacedKeepsBoundAccountWhenRebindIsNever(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	room := NewRoomSelector(RoomStrategyPaced)
+	room.now = func() time.Time { return now }
+	affinity := NewSessionAffinitySelectorWithConfig(SessionAffinityConfig{Fallback: room, TTL: time.Hour, RebindOn: SessionAffinityRebindOnNever})
+	t.Cleanup(affinity.cache.Stop)
+	a := claudeAuth("bound-a", .1, now.Add(time.Hour), .1, now.Add(24*time.Hour), now)
+	b := claudeAuth("other-b", .1, now.Add(time.Hour), .1, now.Add(24*time.Hour), now)
+	opts := cliproxyexecutor.Options{Headers: http.Header{"X-Claude-Code-Session-Id": {"never-session"}}}
+	if got, err := affinity.Pick(context.Background(), "claude", "claude-opus-5-5", opts, []*Auth{a}); err != nil || got.ID != a.ID {
+		t.Fatalf("first pick = %v, %v; want %s", got, err, a.ID)
+	}
+	setUsed5h(a, .95, now)
+	got, err := affinity.Pick(context.Background(), "claude", "claude-opus-5-5", opts, []*Auth{a, b})
+	if err != nil || got.ID != a.ID {
+		t.Fatalf("pick = %v, %v; want the bound account %s kept while it can still serve", got, err, a.ID)
+	}
+}
